@@ -1,21 +1,19 @@
-
+import Link from "next/link";
+import { Activity, ArrowRight, BookOpen, FileBarChart, Settings, Users } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
-export default function Page() {
-  return (
-    <div className="flex">
-      <Sidebar role="admin" />
-      <main className="ml-64 flex-1 p-8 bg-[#f8fafc] min-h-screen">
-        <div className="max-w-6xl mx-auto">
-          <h1 className="text-2xl font-bold mb-6">Admin Dashboard</h1>
-<div className="grid grid-cols-4 gap-4">
-  <a href="/admin/users" className="bg-white p-5 rounded-2xl border"><p className="text-xs text-slate-500">USERS</p><p className="text-2xl font-bold">1,350</p></a>
-  <a href="/admin/courses" className="bg-white p-5 rounded-2xl border"><p className="text-xs text-slate-500">COURSES</p><p className="text-2xl font-bold">42</p></a>
-  <a href="/admin/reports" className="bg-white p-5 rounded-2xl border"><p className="text-xs text-slate-500">REPORTS</p><p className="text-2xl font-bold">18</p></a>
-  <a href="/admin/settings" className="bg-white p-5 rounded-2xl border"><p className="text-xs text-slate-500">SYSTEM</p><p className="text-2xl font-bold">Healthy</p></a>
-</div>
 
-        </div>
-      </main>
+const activity = [
+  { text: "New faculty account created", detail: "Prof. Elena Ramos · 18 minutes ago", type: "User" },
+  { text: "Course catalog updated", detail: "CS 315 · Yesterday, 4:32 PM", type: "Course" },
+  { text: "System report generated", detail: "Enrollment summary · Yesterday, 2:10 PM", type: "Report" },
+];
+
+export default function Page() {
+  return <div className="flex min-h-screen bg-[#f8fafc]"><Sidebar role="admin"/><main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8"><div className="mx-auto max-w-6xl">
+    <div className="mb-7"><p className="text-sm font-medium text-slate-600">System administration</p><h1 className="mt-1 text-2xl font-bold">Admin Dashboard</h1><p className="mt-1 text-sm text-slate-500">Monitor EduTrack activity and manage system resources.</p></div>
+    <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{[[Users,"Users","1,350","1,206 students · 132 faculty","/admin/users"],[BookOpen,"Courses","42","Across 12 programs","/admin/courses"],[FileBarChart,"Reports","18","Generated this month","/admin/reports"],[Activity,"System status","Healthy","All services operational","/admin/settings"]].map(([Icon,title,value,sub,href]:any)=><Link key={title} href={href} className="rounded-2xl border bg-white p-5 transition hover:-translate-y-0.5 hover:shadow-md"><Icon size={20} className="mb-3 text-blue-600"/><p className="text-sm text-slate-500">{title}</p><p className="mt-1 text-2xl font-bold">{value}</p><p className="mt-1 text-xs text-slate-500">{sub}</p></Link>)}</div>
+    <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]"><section className="rounded-2xl border bg-white p-5"><div className="flex items-center justify-between"><div><h2 className="font-semibold">Recent activity</h2><p className="mt-1 text-sm text-slate-500">Latest changes across the system.</p></div><Activity size={18} className="text-slate-400"/></div><div className="mt-4 divide-y">{activity.map((item)=><div key={item.text} className="flex items-start justify-between gap-3 py-4"><div><p className="text-sm font-medium">{item.text}</p><p className="mt-1 text-xs text-slate-500">{item.detail}</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">{item.type}</span></div>)}</div></section>
+      <section className="rounded-2xl border bg-white p-5"><h2 className="font-semibold">Quick actions</h2><div className="mt-4 space-y-2"><Link href="/admin/users" className="flex items-center justify-between rounded-xl border p-4 hover:bg-slate-50"><span><span className="block text-sm font-medium">Manage user accounts</span><span className="mt-1 block text-xs text-slate-500">Add or update access</span></span><ArrowRight size={17} className="text-slate-400"/></Link><Link href="/admin/courses" className="flex items-center justify-between rounded-xl border p-4 hover:bg-slate-50"><span><span className="block text-sm font-medium">Update course catalog</span><span className="mt-1 block text-xs text-slate-500">Review active classes</span></span><ArrowRight size={17} className="text-slate-400"/></Link><Link href="/admin/settings" className="flex items-center justify-between rounded-xl border p-4 hover:bg-slate-50"><span><span className="block text-sm font-medium">System settings</span><span className="mt-1 block text-xs text-slate-500">Configure preferences</span></span><Settings size={17} className="text-slate-400"/></Link><Link href="/admin/profile" className="flex items-center justify-between rounded-xl border p-4 hover:bg-slate-50"><span><span className="block text-sm font-medium">View my profile</span><span className="mt-1 block text-xs text-slate-500">Review administrator details</span></span><ArrowRight size={17} className="text-slate-400"/></Link></div></section>
     </div>
-  );
+  </div></main></div>;
 }

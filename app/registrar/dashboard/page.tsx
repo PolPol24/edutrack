@@ -1,20 +1,19 @@
-
+import Link from "next/link";
+import { ArrowRight, CheckCircle2, ClipboardList, GraduationCap, Users } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
-export default function Page() {
-  return (
-    <div className="flex">
-      <Sidebar role="registrar" />
-      <main className="ml-64 flex-1 p-8 bg-[#f8fafc] min-h-screen">
-        <div className="max-w-6xl mx-auto">
-          <h1 className="text-2xl font-bold mb-6">Registrar Dashboard</h1>
-<div className="grid grid-cols-3 gap-4">
-  <a href="/registrar/enrollments" className="bg-white p-5 rounded-2xl border"><p className="text-xs text-slate-500">PENDING ENROLLMENTS</p><p className="text-2xl font-bold">24</p></a>
-  <a href="/registrar/students" className="bg-white p-5 rounded-2xl border"><p className="text-xs text-slate-500">TOTAL STUDENTS</p><p className="text-2xl font-bold">1,240</p></a>
-  <a href="/registrar/approvals" className="bg-white p-5 rounded-2xl border"><p className="text-xs text-slate-500">APPROVALS TODAY</p><p className="text-2xl font-bold">8</p></a>
-</div>
 
-        </div>
-      </main>
+const requests = [
+  { name: "Alyssa Cruz", id: "2025-00118", course: "IT 205 · Web Application Development", submitted: "Today, 9:14 AM" },
+  { name: "Miguel Reyes", id: "2025-00123", course: "MATH 202 · Discrete Mathematics", submitted: "Today, 8:42 AM" },
+  { name: "Sofia Garcia", id: "2025-00131", course: "CS 205 · Data Structures", submitted: "Yesterday" },
+];
+
+export default function Page() {
+  return <div className="flex min-h-screen bg-[#f8fafc]"><Sidebar role="registrar"/><main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8"><div className="mx-auto max-w-6xl">
+    <div className="mb-7"><p className="text-sm font-medium text-amber-700">Academic year 2025–2026</p><h1 className="mt-1 text-2xl font-bold">Registrar Dashboard</h1><p className="mt-1 text-sm text-slate-500">Good morning. Here’s the latest student records and enrollment activity.</p></div>
+    <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{[[ClipboardList,"Pending enrollments","24","Requests to review","/registrar/enrollments"],[Users,"Total students","1,240","Active student records","/registrar/students"],[CheckCircle2,"Approvals today","8","Completed this day","/registrar/approvals"],[GraduationCap,"Programs","12","Across 4 colleges","/registrar/reports"]].map(([Icon,title,value,sub,href]: any)=><Link href={href} key={title} className="rounded-2xl border bg-white p-5 transition hover:-translate-y-0.5 hover:shadow-md"><Icon size={20} className="mb-3 text-amber-600"/><p className="text-sm text-slate-500">{title}</p><p className="mt-1 text-2xl font-bold">{value}</p><p className="mt-1 text-xs text-slate-500">{sub}</p></Link>)}</div>
+    <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]"><section className="overflow-hidden rounded-2xl border bg-white"><div className="flex items-center justify-between border-b p-5"><div><h2 className="font-semibold">Recent enrollment requests</h2><p className="mt-1 text-sm text-slate-500">Latest student submissions for review.</p></div><Link href="/registrar/approvals" className="text-sm font-medium text-blue-600">Review all</Link></div><div className="divide-y">{requests.map((request)=><div key={request.id} className="flex flex-wrap items-center justify-between gap-3 p-5"><div><p className="font-medium">{request.name} <span className="font-normal text-slate-500">· {request.id}</span></p><p className="mt-1 text-sm text-slate-600">{request.course}</p><p className="mt-1 text-xs text-slate-400">{request.submitted}</p></div><Link href="/registrar/approvals" className="inline-flex items-center gap-1 text-sm font-medium text-blue-600">Review <ArrowRight size={15}/></Link></div>)}</div></section>
+      <section className="rounded-2xl border bg-white p-5"><h2 className="font-semibold">Quick actions</h2><p className="mt-1 text-sm text-slate-500">Common registrar tasks</p><div className="mt-4 space-y-2"><Link href="/registrar/students" className="flex items-center justify-between rounded-xl border p-4 hover:bg-slate-50"><span><span className="block text-sm font-medium">Find a student record</span><span className="mt-1 block text-xs text-slate-500">Search by name or ID</span></span><ArrowRight size={17} className="text-slate-400"/></Link><Link href="/registrar/enrollments" className="flex items-center justify-between rounded-xl border p-4 hover:bg-slate-50"><span><span className="block text-sm font-medium">Check enrollment status</span><span className="mt-1 block text-xs text-slate-500">Browse current term enrollments</span></span><ArrowRight size={17} className="text-slate-400"/></Link><Link href="/registrar/reports" className="flex items-center justify-between rounded-xl border p-4 hover:bg-slate-50"><span><span className="block text-sm font-medium">Generate a report</span><span className="mt-1 block text-xs text-slate-500">Enrollment and student totals</span></span><ArrowRight size={17} className="text-slate-400"/></Link><Link href="/registrar/profile" className="flex items-center justify-between rounded-xl border p-4 hover:bg-slate-50"><span><span className="block text-sm font-medium">View my profile</span><span className="mt-1 block text-xs text-slate-500">Review your staff details</span></span><ArrowRight size={17} className="text-slate-400"/></Link></div></section>
     </div>
-  );
+  </div></main></div>;
 }

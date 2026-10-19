@@ -1,15 +1,28 @@
+"use client";
 
+import { useState } from "react";
+import { Download, FileBarChart, Users } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
+
+const enrollmentByMonth = [
+  { month: "Jun", students: 82, faculty: 6 }, { month: "Jul", students: 105, faculty: 8 }, { month: "Aug", students: 156, faculty: 12 }, { month: "Sep", students: 93, faculty: 4 }, { month: "Oct", students: 48, faculty: 3 },
+];
+const accounts = [["USR-00118","Alyssa Cruz","Student","Active"],["USR-00042","Maria Elena Santos","Faculty","Active"],["USR-00015","Ramon Villanueva","Registrar","Active"],["USR-00001","EduTrack Administrator","Admin","Active"],["USR-00123","Miguel Reyes","Student","Suspended"]];
+
 export default function Page() {
-  return (
-    <div className="flex">
-      <Sidebar role="admin" />
-      <main className="ml-64 flex-1 p-8 bg-[#f8fafc] min-h-screen">
-        <div className="max-w-6xl mx-auto">
-          <h1 className="text-2xl font-bold mb-6">System Reports</h1>
-          <div className='bg-white rounded-2xl border p-6'>Analytics.</div>
-        </div>
-      </main>
-    </div>
-  );
+  const [reportType, setReportType] = useState("Enrollment activity");
+  const [period, setPeriod] = useState("Current academic year");
+  const [downloaded, setDownloaded] = useState(false);
+  function exportReport() {
+    const headers = reportType === "Enrollment activity" ? ["Month","New students","New faculty"] : ["User ID","Name","Role","Status"];
+    const data = reportType === "Enrollment activity" ? enrollmentByMonth.map((item)=>[item.month,String(item.students),String(item.faculty)]) : accounts;
+    const csv = [headers,...data].map((row)=>row.map((cell)=>`"${cell.replaceAll('"','""')}"`).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"})); const link = document.createElement("a"); link.href=url; link.download=`${reportType.toLowerCase().replaceAll(" ","-")}.csv`; link.click(); URL.revokeObjectURL(url); setDownloaded(true);
+  }
+  return <div className="flex min-h-screen bg-[#f8fafc]"><Sidebar role="admin"/><main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8"><div className="mx-auto max-w-6xl">
+    <div className="mb-7"><p className="text-sm font-medium text-blue-600">System analytics</p><h1 className="mt-1 text-2xl font-bold">Reports</h1><p className="mt-1 text-sm text-slate-500">Review usage and enrollment trends across EduTrack.</p></div>
+    <section className="mb-6 rounded-2xl border bg-white p-5"><div className="mb-4"><h2 className="font-semibold">Generate a report</h2><p className="mt-1 text-sm text-slate-500">Choose a report and period to export a sample CSV.</p></div><div className="flex flex-wrap items-end gap-3"><label className="text-sm font-medium">Report<select value={reportType} onChange={(event)=>{setReportType(event.target.value);setDownloaded(false);}} className="mt-1.5 block rounded-lg border bg-white px-3 py-2.5"><option>Enrollment activity</option><option>User directory</option></select></label><label className="text-sm font-medium">Period<select value={period} onChange={(event)=>{setPeriod(event.target.value);setDownloaded(false);}} className="mt-1.5 block rounded-lg border bg-white px-3 py-2.5"><option>Current academic year</option><option>Fall 2025–2026</option><option>Spring 2025–2026</option></select></label><button onClick={exportReport} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"><Download size={16}/>Export CSV</button></div>{downloaded&&<p role="status" className="mt-3 text-sm text-emerald-700">{reportType} report downloaded for {period} (sample data).</p>}</section>
+    <div className="mb-5 grid gap-4 sm:grid-cols-3"><div className="rounded-2xl border bg-white p-5"><Users size={19} className="mb-3 text-blue-600"/><p className="text-sm text-slate-500">Total users</p><p className="mt-1 text-2xl font-bold">1,350</p><p className="mt-1 text-xs text-emerald-700">+8.2% this academic year</p></div><div className="rounded-2xl border bg-white p-5"><FileBarChart size={19} className="mb-3 text-blue-600"/><p className="text-sm text-slate-500">Active courses</p><p className="mt-1 text-2xl font-bold">42</p><p className="mt-1 text-xs text-slate-500">Across 12 programs</p></div><div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Reports generated</p><p className="mt-1 text-2xl font-bold">18</p><p className="mt-1 text-xs text-slate-500">This month</p></div></div>
+    {reportType === "Enrollment activity" ? <section className="rounded-2xl border bg-white p-5"><div className="mb-6"><h2 className="font-semibold">New accounts by month</h2><p className="mt-1 text-sm text-slate-500">Sample student and faculty account creation · {period}</p></div><div className="space-y-4">{enrollmentByMonth.map((item)=><div key={item.month} className="grid grid-cols-[40px_1fr_72px] items-center gap-3"><span className="text-xs font-medium text-slate-500">{item.month}</span><div><div className="flex h-3 overflow-hidden rounded-full bg-slate-100"><div className="bg-blue-600" style={{width:`${item.students/1.6}%`}}/><div className="bg-emerald-500" style={{width:`${item.faculty/1.6}%`}}/></div></div><span className="text-right text-xs text-slate-600">{item.students+item.faculty}</span></div>)}</div><div className="mt-5 flex gap-5 text-xs text-slate-500"><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-blue-600"/>Students</span><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-emerald-500"/>Faculty</span></div></section> : <section className="overflow-hidden rounded-2xl border bg-white"><div className="border-b p-5"><h2 className="font-semibold">Sample user directory</h2></div><div className="overflow-x-auto"><table className="w-full min-w-[560px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{["User ID","Name","Role","Status"].map((label)=><th key={label} className="px-5 py-3 font-medium">{label}</th>)}</tr></thead><tbody>{accounts.map((row,index)=><tr key={index} className="border-t">{row.map((cell,col)=><td key={col} className="px-5 py-4">{cell}</td>)}</tr>)}</tbody></table></div></section>}
+  </div></main></div>;
 }

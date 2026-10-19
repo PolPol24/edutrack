@@ -1,15 +1,31 @@
+"use client";
 
+import { useState } from "react";
+import Link from "next/link";
+import { Eye, Search, UserPlus, X } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
+
+const students = [
+  { id: "2025-00118", name: "Alyssa Cruz", email: "alyssa.cruz@edutrack.edu", program: "BS Information Systems", year: "1st Year", status: "Active", units: 15 },
+  { id: "2025-00123", name: "Miguel Reyes", email: "miguel.reyes@edutrack.edu", program: "BS Information Systems", year: "1st Year", status: "Active", units: 18 },
+  { id: "2025-00131", name: "Sofia Garcia", email: "sofia.garcia@edutrack.edu", program: "BS Computer Science", year: "2nd Year", status: "Active", units: 16 },
+  { id: "2024-00067", name: "Isabella Flores", email: "isabella.flores@edutrack.edu", program: "BS Information Technology", year: "3rd Year", status: "Active", units: 15 },
+  { id: "2023-00042", name: "Liam Mendoza", email: "liam.mendoza@edutrack.edu", program: "BS Computer Science", year: "4th Year", status: "On leave", units: 0 },
+  { id: "2025-00144", name: "Noah Lim", email: "noah.lim@edutrack.edu", program: "BS Information Technology", year: "1st Year", status: "Active", units: 17 },
+];
+
 export default function Page() {
-  return (
-    <div className="flex">
-      <Sidebar role="registrar" />
-      <main className="ml-64 flex-1 p-8 bg-[#f8fafc] min-h-screen">
-        <div className="max-w-6xl mx-auto">
-          <h1 className="text-2xl font-bold mb-6">Students</h1>
-          <div className='bg-white rounded-2xl border p-6'>Student records table - CRUD linked to Student table.</div>
-        </div>
-      </main>
-    </div>
-  );
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("All statuses");
+  const [selected, setSelected] = useState<(typeof students)[number] | null>(null);
+  const visible = students.filter((student) => `${student.id} ${student.name} ${student.program}`.toLowerCase().includes(query.toLowerCase()) && (status === "All statuses" || student.status === status));
+
+  return <div className="flex min-h-screen bg-[#f8fafc]"><Sidebar role="registrar"/><main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8"><div className="mx-auto max-w-6xl">
+    <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm font-medium text-amber-700">Student records</p><h1 className="mt-1 text-2xl font-bold">Students</h1><p className="mt-1 text-sm text-slate-500">Search and review student academic records.</p></div><button onClick={() => window.alert("New student registration is a demo action. Connect the student records service to create accounts.")} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"><UserPlus size={16}/>Add student</button></div>
+    <div className="mb-5 grid gap-4 sm:grid-cols-3"><div className="rounded-2xl border bg-white p-4"><p className="text-sm text-slate-500">Total students</p><p className="mt-1 text-2xl font-bold">1,240</p></div><div className="rounded-2xl border bg-white p-4"><p className="text-sm text-slate-500">Active in this list</p><p className="mt-1 text-2xl font-bold">{students.filter((student) => student.status === "Active").length}</p></div><div className="rounded-2xl border bg-white p-4"><p className="text-sm text-slate-500">Programs shown</p><p className="mt-1 text-2xl font-bold">3</p></div></div>
+    <section className="overflow-hidden rounded-2xl border bg-white"><div className="flex flex-wrap gap-3 border-b p-4"><label className="flex min-w-[240px] flex-1 items-center gap-2 rounded-lg border px-3"><Search size={17} className="text-slate-400"/><input aria-label="Search students" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by name, student ID, or program" className="w-full py-2.5 text-sm outline-none"/></label><select aria-label="Filter students by status" value={status} onChange={(event) => setStatus(event.target.value)} className="rounded-lg border bg-white px-3 text-sm"><option>All statuses</option><option>Active</option><option>On leave</option></select></div>
+      <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3 font-medium">Student</th><th className="px-5 py-3 font-medium">Program</th><th className="px-5 py-3 font-medium">Year</th><th className="px-5 py-3 font-medium">Status</th><th className="px-5 py-3 text-right font-medium">Action</th></tr></thead><tbody>{visible.map((student) => <tr key={student.id} className="border-t"><td className="px-5 py-4"><p className="font-medium">{student.name}</p><p className="text-xs text-slate-500">{student.id}</p></td><td className="px-5 py-4">{student.program}</td><td className="px-5 py-4">{student.year}</td><td className="px-5 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-medium ${student.status === "Active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{student.status}</span></td><td className="px-5 py-4 text-right"><button onClick={() => setSelected(student)} className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-800"><Eye size={15}/>View</button></td></tr>)}{visible.length === 0 && <tr><td colSpan={5} className="px-5 py-10 text-center text-slate-500">No students match your search.</td></tr>}</tbody></table></div><p className="border-t px-5 py-3 text-xs text-slate-500">Showing {visible.length} sample student records.</p>
+    </section>
+    {selected && <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/30 p-4" role="presentation" onClick={() => setSelected(null)}><section role="dialog" aria-modal="true" aria-labelledby="student-detail-title" onClick={(event) => event.stopPropagation()} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"><div className="flex items-start justify-between"><div><h2 id="student-detail-title" className="text-lg font-semibold">Student record</h2><p className="mt-1 text-sm text-slate-500">{selected.id}</p></div><button aria-label="Close student details" onClick={() => setSelected(null)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={18}/></button></div><div className="mt-5 space-y-3 text-sm"><p><span className="text-slate-500">Name</span><br/><span className="font-medium">{selected.name}</span></p><p><span className="text-slate-500">Email</span><br/><span className="font-medium">{selected.email}</span></p><p><span className="text-slate-500">Program</span><br/><span className="font-medium">{selected.program} · {selected.year}</span></p><p><span className="text-slate-500">Current enrollment</span><br/><span className="font-medium">{selected.units} units</span></p><p><span className="text-slate-500">Record status</span><br/><span className="font-medium">{selected.status}</span></p></div><Link href="/registrar/enrollments" className="mt-5 inline-block text-sm font-medium text-blue-600">View enrollment records →</Link></section></div>}
+  </div></main></div>;
 }
