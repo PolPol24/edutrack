@@ -22,6 +22,7 @@ try {
         'DELETE FROM assessments',
         'DELETE FROM class_meetings',
         'DELETE FROM enrollments',
+        'DELETE FROM student_section_assignments',
         'UPDATE system_settings SET updated_by_user_id = NULL',
         'DELETE FROM course_offerings',
         'DELETE FROM program_courses',
@@ -173,8 +174,25 @@ try {
     if (!$activeTerm) {
         throw new RuntimeException('No active academic term is configured.');
     }
-    // Keep demo offerings available for registrar setup, but leave them unassigned.
     $demoSections = ['BSIT-1A', 'BSCS-2C', 'BSCS-3D'];
+    $facultyAssignments = [
+        'BSIT-1A' => [
+            'faculty@edutrack.edu' => ['DCIT 26', 'COSC 80'],
+            'lord.toletole@edutrack.edu' => ['COSC 85', 'DCIT 65'],
+            'patricia.alonzo@edutrack.edu' => ['MATH 3'],
+        ],
+        'BSCS-2C' => [
+            'faculty@edutrack.edu' => ['COSC 80', 'DCIT 26'],
+            'amara.delacruz@edutrack.edu' => ['COSC 85', 'DCIT 65'],
+            'joaquin.padilla@edutrack.edu' => ['MATH 3'],
+            'vincent.chua@edutrack.edu' => ['COSC 101'],
+        ],
+        'BSCS-3D' => [
+            'faculty@edutrack.edu' => ['COSC 75', 'COSC 101'],
+            'bianca.manalo@edutrack.edu' => ['MATH 3', 'COSC 80'],
+            'luis.romero@edutrack.edu' => ['DCIT 26'],
+        ],
+    ];
     $insertOffering = $pdo->prepare(
         'INSERT INTO course_offerings (course_id, term_id, section_code, faculty_user_id, capacity)
          SELECT course_id, :term_id, :section, :faculty_id, 40 FROM courses WHERE course_code = :course_code'
@@ -182,6 +200,14 @@ try {
     $getOffering = $pdo->prepare(
         'SELECT co.offering_id FROM course_offerings co JOIN courses c ON c.course_id = co.course_id
          WHERE co.term_id = :term_id AND co.section_code = :section AND c.course_code = :course_code'
+    );
+    $assignFaculty = $pdo->prepare(
+        'UPDATE course_offerings co
+         JOIN courses c ON c.course_id = co.course_id
+         SET co.faculty_user_id = :faculty_id
+         WHERE co.term_id = :term_id
+           AND co.section_code = :section
+           AND c.course_code = :course_code'
     );
     $insertEnrollment = $pdo->prepare(
         'INSERT INTO enrollments (request_code, student_user_id, offering_id, enrollment_status)
@@ -204,6 +230,23 @@ try {
             $offeringId = (int)$getOffering->fetchColumn();
             foreach (['Quiz', 'Project', 'Exam'] as $assessment) {
                 $insertAssessment->execute(['offering' => $offeringId, 'name' => $assessment]);
+            }
+        }
+    }
+
+    foreach ($facultyAssignments as $section => $teachers) {
+        foreach ($teachers as $email => $courseCodes) {
+            $facultyId = $accountIds[$email] ?? null;
+            if (!$facultyId) {
+                continue;
+            }
+            foreach ($courseCodes as $courseCode) {
+                $assignFaculty->execute([
+                    'faculty_id' => $facultyId,
+                    'term_id' => $activeTerm,
+                    'section' => $section,
+                    'course_code' => $courseCode,
+                ]);
             }
         }
     }

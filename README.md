@@ -78,8 +78,9 @@ configuration allows both frontend ports 3000 and 3001.
 - `GET|POST ?action=registrar_enrollment` lets registrars preview a student’s
   year and semester curriculum, then enroll them in all required subjects.
 - `GET|POST|PATCH ?action=registrar_sections` forms the three program sections,
-  creates unique course numbers for subject sections, and assigns active
-  faculty to each course number.
+  creates unique course numbers for subject sections, assigns active faculty to
+  each course number, and auto-enrolls each student into the required courses
+  for their assigned section.
 - Profile, student roster/course/attendance, admin account/catalog/settings,
   and database report actions for the role pages
 

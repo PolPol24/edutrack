@@ -1,9 +1,15 @@
+-- ============================================================================
+-- EduTrack database schema and seed data
+-- Tables are defined before their dependents to preserve foreign-key order.
+-- ============================================================================
+
 CREATE DATABASE IF NOT EXISTS edutrack_db
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 
 USE edutrack_db;
 
+-- 1. Academic structure
 CREATE TABLE IF NOT EXISTS departments (
   department_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   department_code VARCHAR(20) NOT NULL,
@@ -63,6 +69,7 @@ CREATE TABLE IF NOT EXISTS academic_terms (
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+-- 2. User accounts and profiles
 CREATE TABLE IF NOT EXISTS users (
   user_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   full_name VARCHAR(160) NOT NULL,
@@ -170,6 +177,7 @@ CREATE TABLE IF NOT EXISTS employee_profiles (
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+-- 3. Courses, curriculum, sections, and class schedules
 CREATE TABLE IF NOT EXISTS courses (
   course_id VARCHAR(10) NOT NULL,
   course_code VARCHAR(20) NOT NULL,
@@ -270,6 +278,7 @@ CREATE TABLE IF NOT EXISTS class_meetings (
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+-- 4. Enrollment, assessment, grades, and attendance
 CREATE TABLE IF NOT EXISTS enrollments (
   enrollment_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   request_code VARCHAR(24) NOT NULL,
@@ -404,6 +413,7 @@ CREATE TABLE IF NOT EXISTS attendance_records (
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+-- 5. Application settings
 CREATE TABLE IF NOT EXISTS system_settings (
   setting_key VARCHAR(100) NOT NULL,
   setting_value JSON NOT NULL,
@@ -416,6 +426,7 @@ CREATE TABLE IF NOT EXISTS system_settings (
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+-- 6. Seed data: departments and academic programs
 INSERT INTO departments (department_code, department_name, college_name)
 VALUES
   ('IS', 'Information Systems', 'College of Computing'),
@@ -439,6 +450,7 @@ ON DUPLICATE KEY UPDATE
   program_name = VALUES(program_name),
   department_id = VALUES(department_id);
 
+-- Seed data: campus student registry
 INSERT INTO campus_student_registry (student_number, first_name, last_name, student_email, name_suffix, date_of_birth, program_id, year_level)
 VALUES
   ('202600001', 'Ariana', 'Santos', 'ariana.santos@cvsu.edu.ph', NULL, '2001-01-01', 'CS-02', 1),
@@ -610,6 +622,7 @@ JOIN (
 ) distribution ON distribution.student_number = r.student_number
 SET r.section_code = distribution.section_code;
 
+-- Seed data: academic calendar
 INSERT INTO academic_years (year_label, start_date, end_date, is_current)
 VALUES ('2026-2027', '2026-08-01', '2027-06-30', TRUE)
 ON DUPLICATE KEY UPDATE
@@ -656,6 +669,7 @@ ON DUPLICATE KEY UPDATE
   enrollment_end = VALUES(enrollment_end),
   term_status = VALUES(term_status);
 
+-- Seed data: course catalog, program curricula, and course offerings
 INSERT INTO courses (course_id, course_code, course_title, units, department_id)
 SELECT seed.course_id, seed.course_code, seed.course_title, seed.units, departments.department_id
 FROM (
@@ -824,6 +838,8 @@ JOIN (
 ) numbered ON numbered.offering_id = co.offering_id
 SET co.course_number = numbered.course_number;
 
+
+-- Seed data: application defaults
 INSERT INTO system_settings (setting_key, setting_value, description)
 VALUES
   ('institution_name', JSON_QUOTE('EduTrack University'), 'Name displayed throughout the application.'),

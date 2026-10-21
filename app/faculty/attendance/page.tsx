@@ -196,7 +196,7 @@ export default function Page() {
                     className="mt-1.5 block rounded-lg border bg-white px-3 py-2"
                   >
                     {classes.length === 0 && <option value="">No assigned classes</option>}
-                    {classes.map((item) => <option key={item.offering_id} value={item.offering_id}>{item.course_code} · {item.section_code} · {item.year_label} {item.term_name}</option>)}
+                    {classes.map((item) => <option key={item.offering_id} value={item.offering_id}>{item.course_code} | {item.section_code} | {item.term_name}</option>)}
                   </select>
                 </label>
                 <label className="text-sm font-medium text-slate-700">

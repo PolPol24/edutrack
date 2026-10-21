@@ -1010,10 +1010,82 @@ try {
                         }
                     }
                 }
+                $studentList = $pdo->prepare(
+                    'SELECT sp.user_id, sp.student_number, p.program_code, sp.year_level,
+                            COALESCE(section_assignment.section_code, roster.section_code, "A") AS section_letter
+                     FROM student_profiles sp
+                     JOIN users u ON u.user_id = sp.user_id AND u.account_status = "active"
+                     JOIN programs p ON p.program_id = sp.program_id AND p.is_active = 1
+                     LEFT JOIN student_section_assignments section_assignment
+                       ON section_assignment.student_user_id = sp.user_id
+                      AND section_assignment.term_id = :term_id
+                     LEFT JOIN campus_student_registry roster ON roster.student_number = sp.student_number
+                     WHERE sp.program_id = :program_id AND sp.student_status = "active"
+                     ORDER BY sp.student_number'
+                );
+                $studentList->execute([
+                    'program_id' => $programId,
+                    'term_id' => $termId,
+                ]);
+                $offeringLookup = $pdo->prepare(
+                    'SELECT offering_id, course_id, section_code, offering_status, capacity
+                     FROM course_offerings
+                     WHERE term_id = :term_id AND course_id = :course_id AND section_code = :section_code
+                     LIMIT 1 FOR UPDATE'
+                );
+                $existingEnrollment = $pdo->prepare(
+                    'SELECT enrollment_id, enrollment_status
+                     FROM enrollments
+                     WHERE student_user_id = :student_user_id AND offering_id = :offering_id
+                     LIMIT 1 FOR UPDATE'
+                );
+                $enrollStudent = $pdo->prepare(
+                    'INSERT INTO enrollments
+                       (request_code, student_user_id, offering_id, enrollment_status,
+                        reviewed_by_user_id, reviewed_at, decision_note)
+                     VALUES (:request_code, :student_user_id, :offering_id, "approved", :reviewer, NOW(), :note)
+                     ON DUPLICATE KEY UPDATE enrollment_status = "approved",
+                       requested_at = NOW(), reviewed_by_user_id = VALUES(reviewed_by_user_id),
+                       reviewed_at = NOW(), decision_note = VALUES(decision_note)'
+                );
+                $studentCount = 0;
+                foreach ($studentList->fetchAll() as $studentProfile) {
+                    $studentSectionCode = (string)$studentProfile['section_letter'];
+                    foreach ($courses as $course) {
+                        $sectionCode = $studentProfile['program_code'] . '-' . $studentProfile['year_level'] . '-' . $studentSectionCode;
+                        $offeringLookup->execute([
+                            'term_id' => $termId,
+                            'course_id' => $course['course_id'],
+                            'section_code' => $sectionCode,
+                        ]);
+                        $offering = $offeringLookup->fetch();
+                        if (!$offering || $offering['offering_status'] !== 'open') {
+                            continue;
+                        }
+                        $existingEnrollment->execute([
+                            'student_user_id' => $studentProfile['user_id'],
+                            'offering_id' => $offering['offering_id'],
+                        ]);
+                        $currentEnrollment = $existingEnrollment->fetch();
+                        if ($currentEnrollment && in_array($currentEnrollment['enrollment_status'], ['pending', 'approved'], true)) {
+                            continue;
+                        }
+                        $requestCode = 'REG-' . date('ymdHis') . '-' . strtoupper(bin2hex(random_bytes(3)));
+                        $enrollStudent->execute([
+                            'request_code' => $requestCode,
+                            'student_user_id' => $studentProfile['user_id'],
+                            'offering_id' => $offering['offering_id'],
+                            'reviewer' => $registrar['user_id'],
+                            'note' => 'Batch enrollment for ' . $studentProfile['program_code'] . ' Year ' . $studentProfile['year_level'] . ' Section ' . $studentSectionCode . '.',
+                        ]);
+                        $studentCount++;
+                    }
+                }
                 $pdo->commit();
                 send_json(200, [
-                    'message' => $term['program_code'] . ' sections A, B, and C are ready for ' . $term['term_name'] . '. Course numbers have been assigned.',
+                    'message' => $term['program_code'] . ' sections A, B, and C are ready for ' . $term['term_name'] . '. Course numbers and student enrollments have been assigned.',
                     'unit_total' => $units,
+                    'enrollment_rows' => $studentCount,
                 ]);
             }
             send_json(422, ['error' => 'Choose a supported section management action.']);
@@ -1077,6 +1149,7 @@ try {
             if ($studentUserId && $termId) {
                 $preview = $pdo->prepare(
                     'SELECT c.course_id, c.course_code, c.course_title, c.units,
+                            COALESCE(section_assignment.section_code, roster.section_code, \'A\') AS section_letter,
                             EXISTS (
                               SELECT 1 FROM enrollments e
                               JOIN course_offerings co ON co.offering_id = e.offering_id
@@ -1094,6 +1167,9 @@ try {
                          WHEN \'1st semester\' THEN 1 WHEN \'2nd semester\' THEN 2 ELSE 0 END
                        AND pc.is_required = 1
                      JOIN courses c ON c.course_id = pc.course_id AND c.course_status = \'active\'
+                     LEFT JOIN student_section_assignments section_assignment
+                       ON section_assignment.student_user_id = sp.user_id AND section_assignment.term_id = t.term_id
+                     LEFT JOIN campus_student_registry roster ON roster.student_number = sp.student_number
                      WHERE sp.user_id = :student_user_id AND sp.student_status = \'active\'
                      ORDER BY c.course_code'
                 );
@@ -1524,11 +1600,15 @@ try {
              LEFT JOIN class_meetings cm ON cm.offering_id = co.offering_id
              WHERE co.faculty_user_id = :faculty_user_id
                AND co.offering_status = \'open\' AND c.course_status = \'active\'
+               AND (:active_only = 0 OR t.term_status = \'active\')
              GROUP BY co.offering_id, co.course_number, c.course_code, c.course_title, co.section_code,
                       t.term_name, ay.year_label, co.capacity
              ORDER BY ay.start_date DESC, t.start_date, c.course_code, co.section_code'
         );
-        $statement->execute(['faculty_user_id' => $user['user_id']]);
+        $statement->execute([
+            'faculty_user_id' => $user['user_id'],
+            'active_only' => ($_GET['active_only'] ?? '') === '1' ? 1 : 0,
+        ]);
         send_json(200, ['classes' => $statement->fetchAll()]);
     }
 
