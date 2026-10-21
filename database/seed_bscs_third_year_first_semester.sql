@@ -15,27 +15,22 @@ WHERE p.program_code IN ('BSCS', 'BSIT')
   )
 ON DUPLICATE KEY UPDATE recommended_year = VALUES(recommended_year);
 
--- Faculty assignments alternate across the two demo faculty accounts.
--- The provided materials did not include a third-year timetable, so this seed
--- creates offerings without inventing class meeting times.
+-- Create unassigned offerings; the registrar will select instructors.
 INSERT INTO course_offerings (course_id, term_id, section_code, faculty_user_id, capacity)
-SELECT c.course_id, t.term_id, 'BSCS-3D', u.user_id, 40
+SELECT c.course_id, t.term_id, 'BSCS-3D', NULL, 40
 FROM (
-  SELECT 'COSC 80' AS course_code, 'lord.toletole@edutrack.edu' AS faculty_email
-  UNION ALL SELECT 'DCIT 26', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'COSC 85', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'DCIT 65', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'COSC 75', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'COSC 101', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'MATH 3', 'lord.toletole@edutrack.edu'
+  SELECT 'COSC 80' AS course_code
+  UNION ALL SELECT 'DCIT 26'
+  UNION ALL SELECT 'COSC 85'
+  UNION ALL SELECT 'DCIT 65'
+  UNION ALL SELECT 'COSC 75'
+  UNION ALL SELECT 'COSC 101'
+  UNION ALL SELECT 'MATH 3'
 ) AS seed
 JOIN courses c ON c.course_code = seed.course_code
 JOIN academic_terms t ON t.term_status = 'active'
-JOIN users u ON u.email = seed.faculty_email
-  AND u.role = 'faculty' AND u.account_status = 'active'
-JOIN employee_profiles ep ON ep.user_id = u.user_id
 ON DUPLICATE KEY UPDATE
-  faculty_user_id = VALUES(faculty_user_id),
+  faculty_user_id = NULL,
   offering_status = 'open';
 
 COMMIT;

@@ -9,21 +9,20 @@ SET course_code = 'PATHFIT 1', course_title = 'Physical Activities Toward Health
 WHERE course_id = 'P-01' AND course_code = 'PATHEFT 1';
 
 INSERT INTO course_offerings (course_id, term_id, section_code, faculty_user_id, capacity)
-SELECT c.course_id, t.term_id, seed.section_code, u.user_id, 40
+SELECT c.course_id, t.term_id, seed.section_code, NULL, 40
 FROM (
-  SELECT 'BSCS-1B' AS section_code, 'GNED 05' AS course_code, 'faculty@edutrack.edu' AS faculty_email
-  UNION ALL SELECT 'BSCS-1B', 'DCIT 22', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'BSCS-1B', 'GNED 11', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'BSCS-1B', 'COSC 50', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'BSCS-1B', 'CvSU 101', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'BSCS-1B', 'GNED 02', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'BSCS-1B', 'PATHFIT 1', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'BSCS-1B', 'DCIT 21', 'lord.toletole@edutrack.edu'
+  SELECT 'BSCS-1B' AS section_code, 'GNED 05' AS course_code
+  UNION ALL SELECT 'BSCS-1B', 'DCIT 22'
+  UNION ALL SELECT 'BSCS-1B', 'GNED 11'
+  UNION ALL SELECT 'BSCS-1B', 'COSC 50'
+  UNION ALL SELECT 'BSCS-1B', 'CvSU 101'
+  UNION ALL SELECT 'BSCS-1B', 'GNED 02'
+  UNION ALL SELECT 'BSCS-1B', 'PATHFIT 1'
+  UNION ALL SELECT 'BSCS-1B', 'DCIT 21'
 ) AS seed
 JOIN courses c ON c.course_code = seed.course_code
 JOIN academic_terms t ON t.term_status = 'active'
-JOIN users u ON u.email = seed.faculty_email AND u.role = 'faculty' AND u.account_status = 'active'
-ON DUPLICATE KEY UPDATE offering_status = 'open';
+ON DUPLICATE KEY UPDATE offering_status = 'open', faculty_user_id = NULL;
 
 INSERT INTO class_meetings (offering_id, day_of_week, start_time, end_time, room)
 SELECT co.offering_id, seed.day_of_week, seed.start_time, seed.end_time, seed.room

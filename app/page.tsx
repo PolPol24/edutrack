@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { ArrowRight, Eye, EyeOff, GraduationCap, LockKeyhole, Mail } from "lucide-react";
 import { apiRequest } from "@/lib/api";
 
@@ -86,6 +87,7 @@ export default function LoginPage() {
             <button type="submit" className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-600/20">
               Sign in <ArrowRight size={17} />
             </button>
+          <p className="pt-1 text-center text-sm text-slate-500">Are you a student?{" "}<Link href="/register" className="font-semibold text-blue-600 hover:text-blue-800">Register here</Link></p>
           </form>
 
         </div>

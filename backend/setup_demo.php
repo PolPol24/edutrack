@@ -35,8 +35,24 @@ try {
         ['Pol Samsung', 'pol.samsung@edutrack.edu', 'student', 'BSCS', 2, 'BSCS-2C', '2026'],
         ['Maria Elena Santos', 'faculty@edutrack.edu', 'faculty', null, null, null, null],
         ['Lord Toletole', 'lord.toletole@edutrack.edu', 'faculty', null, null, null, null],
+        ['Amara Dela Cruz', 'amara.delacruz@edutrack.edu', 'faculty', null, null, null, null],
+        ['Joaquin Padilla', 'joaquin.padilla@edutrack.edu', 'faculty', null, null, null, null],
+        ['Bianca Manalo', 'bianca.manalo@edutrack.edu', 'faculty', null, null, null, null],
+        ['Luis Romero', 'luis.romero@edutrack.edu', 'faculty', null, null, null, null],
+        ['Patricia Alonzo', 'patricia.alonzo@edutrack.edu', 'faculty', null, null, null, null],
+        ['Vincent Chua', 'vincent.chua@edutrack.edu', 'faculty', null, null, null, null],
         ['Ramon Villanueva', 'registrar@edutrack.edu', 'registrar', null, null, null, null],
         ['EduTrack Administrator', 'admin@edutrack.edu', 'admin', null, null, null, null],
+    ];
+    $facultyDepartments = [
+        'faculty@edutrack.edu' => 'IS',
+        'lord.toletole@edutrack.edu' => 'CS',
+        'amara.delacruz@edutrack.edu' => 'IT',
+        'joaquin.padilla@edutrack.edu' => 'IS',
+        'bianca.manalo@edutrack.edu' => 'CS',
+        'luis.romero@edutrack.edu' => 'IT',
+        'patricia.alonzo@edutrack.edu' => 'IS',
+        'vincent.chua@edutrack.edu' => 'CS',
     ];
     $allowedEmails = array_column($accounts, 1);
     $placeholders = implode(',', array_fill(0, count($allowedEmails), '?'));
@@ -101,7 +117,7 @@ try {
                 'year_level' => $yearLevel,
             ]);
         } else {
-            $departmentCode = $role === 'faculty' ? ($email === 'faculty@edutrack.edu' ? 'IS' : 'CS') : null;
+            $departmentCode = $role === 'faculty' ? ($facultyDepartments[$email] ?? 'CS') : null;
             $departmentId = null;
             if ($departmentCode !== null) {
                 $findDepartment->execute(['code' => $departmentCode]);
@@ -157,11 +173,8 @@ try {
     if (!$activeTerm) {
         throw new RuntimeException('No active academic term is configured.');
     }
-    $facultyForSection = [
-        'BSIT-1A' => $accountIds['faculty@edutrack.edu'],
-        'BSCS-2C' => $accountIds['lord.toletole@edutrack.edu'],
-        'BSCS-3D' => $accountIds['lord.toletole@edutrack.edu'],
-    ];
+    // Keep demo offerings available for registrar setup, but leave them unassigned.
+    $demoSections = ['BSIT-1A', 'BSCS-2C', 'BSCS-3D'];
     $insertOffering = $pdo->prepare(
         'INSERT INTO course_offerings (course_id, term_id, section_code, faculty_user_id, capacity)
          SELECT course_id, :term_id, :section, :faculty_id, 40 FROM courses WHERE course_code = :course_code'
@@ -179,12 +192,12 @@ try {
          VALUES (:offering, :name, 100, 0)'
     );
     $requestCodes = [];
-    foreach (array_keys($facultyForSection) as $section) {
+    foreach ($demoSections as $section) {
         foreach ($courses as [$code]) {
             $insertOffering->execute([
                 'term_id' => $activeTerm,
                 'section' => $section,
-                'faculty_id' => $facultyForSection[$section],
+                'faculty_id' => null,
                 'course_code' => $code,
             ]);
             $getOffering->execute(['term_id' => $activeTerm, 'section' => $section, 'course_code' => $code]);
@@ -223,7 +236,7 @@ try {
     }
 
     $pdo->commit();
-    fwrite(STDOUT, "EduTrack demo reset complete: 3 students, 2 faculty, one registrar, one admin; 7 courses in 3 sections.\n");
+    fwrite(STDOUT, "EduTrack demo reset complete: 3 students, 8 faculty, one registrar, one admin; 7 courses in 3 sections.\n");
     fwrite(STDOUT, "All demo passwords are: password\n");
 } catch (Throwable $error) {
     if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {

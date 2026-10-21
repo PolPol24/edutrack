@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, BookOpen, ClipboardList, CalendarCheck, User, LogOut, Users, GraduationCap, FileBarChart, Settings } from "lucide-react";
+import { LayoutDashboard, BookOpen, ClipboardList, CalendarCheck, User, LogOut, Users, GraduationCap, FileBarChart, Settings, Layers3 } from "lucide-react";
 import { apiRequest } from "@/lib/api";
 
 type NavItem = { label: string; href: string; icon: any };
@@ -26,6 +26,8 @@ const navByRole: Record<string, NavItem[]> = {
   registrar: [
     { label: "Dashboard", href: "/registrar/dashboard", icon: LayoutDashboard },
     { label: "Students", href: "/registrar/students", icon: GraduationCap },
+    { label: "Faculty", href: "/registrar/faculty", icon: Users },
+    { label: "Sections", href: "/registrar/sections", icon: Layers3 },
     { label: "Enrollments", href: "/registrar/enrollments", icon: ClipboardList },
     { label: "Approvals", href: "/registrar/approvals", icon: Users },
     { label: "Reports", href: "/registrar/reports", icon: FileBarChart },

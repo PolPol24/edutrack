@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, CheckCheck, Save } from "lucide-react";
+import { Check, CheckCheck, Save, Search } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { apiRequest } from "@/lib/api";
 
@@ -11,6 +11,8 @@ type FacultyClass = {
   course_code: string;
   course_title: string;
   section_code: string;
+  term_name: string;
+  year_label: string;
 };
 type AttendanceStudent = {
   enrollment_id: number | string;
@@ -49,6 +51,7 @@ export default function Page() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
   const [confirmation, setConfirmation] = useState<ConfirmationAction>(null);
   const [confirmationError, setConfirmationError] = useState("");
 
@@ -58,8 +61,8 @@ export default function Page() {
       .then(({ classes: results }) => {
         if (!active) return;
         setClasses(results);
-        const requestedCourse = new URLSearchParams(window.location.search).get("course");
-        const selected = results.find((item) => item.course_code === requestedCourse) ?? results[0];
+        const requestedOffering = new URLSearchParams(window.location.search).get("offering_id");
+        const selected = results.find((item) => String(item.offering_id) === requestedOffering) ?? results[0];
         setOfferingId(selected ? String(selected.offering_id) : "");
       })
       .catch((requestError: unknown) => {
@@ -110,6 +113,10 @@ export default function Page() {
   const selectedClass = classes.find((item) => String(item.offering_id) === offeringId);
   const markedCount = useMemo(() => students.filter((student) => student.status !== "unmarked").length, [students]);
   const presentCount = useMemo(() => students.filter((student) => student.status === "present").length, [students]);
+  const filteredStudents = useMemo(
+    () => students.filter((student) => `${student.name} ${student.id}`.toLowerCase().includes(query.trim().toLowerCase())),
+    [students, query],
+  );
 
   function markAllPresent() {
     setStudents((current) => current.map((student) => ({ ...student, status: "present" })));
@@ -171,7 +178,7 @@ export default function Page() {
       <main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8">
         <div className="mx-auto max-w-6xl">
           <div className="mb-7">
-            <p className="text-sm font-medium text-blue-600">2026–2027 · 1st semester</p>
+            <p className="text-sm font-medium text-blue-600">{selectedClass ? `${selectedClass.year_label} · ${selectedClass.term_name}` : "Assigned classes"}</p>
             <h1 className="mt-1 text-2xl font-bold">Attendance</h1>
             <p className="mt-1 text-sm text-slate-500">Record attendance for your class sessions.</p>
           </div>
@@ -185,9 +192,11 @@ export default function Page() {
                     aria-label="Class"
                     value={offeringId}
                     onChange={(event) => setOfferingId(event.target.value)}
+                    disabled={loading || classes.length === 0}
                     className="mt-1.5 block rounded-lg border bg-white px-3 py-2"
                   >
-                    {classes.map((item) => <option key={item.offering_id} value={item.offering_id}>{item.course_code} · {item.section_code}</option>)}
+                    {classes.length === 0 && <option value="">No assigned classes</option>}
+                    {classes.map((item) => <option key={item.offering_id} value={item.offering_id}>{item.course_code} · {item.section_code} · {item.year_label} {item.term_name}</option>)}
                   </select>
                 </label>
                 <label className="text-sm font-medium text-slate-700">
@@ -220,11 +229,24 @@ export default function Page() {
                 <h2 className="font-semibold">Class roster · {selectedClass?.course_code ?? "—"}</h2>
                 <p className="mt-1 text-sm text-slate-500">Session date · {sessionDate}</p>
               </div>
-              {saved && <span role="status" className="inline-flex items-center gap-1.5 text-sm text-emerald-700"><Check size={16}/>Attendance saved to the database.</span>}
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="relative">
+                  <span className="sr-only">Search students</span>
+                  <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="search"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search students"
+                    className="w-full rounded-lg border py-2 pl-9 pr-3 text-sm sm:w-56"
+                  />
+                </label>
+                {saved && <span role="status" className="inline-flex items-center gap-1.5 text-sm text-emerald-700"><Check size={16}/>Attendance saved to the database.</span>}
+              </div>
             </div>
             {students.length > 0 ? (
-              <div className="divide-y">
-                {students.map((student) => (
+              filteredStudents.length > 0 ? <div className="divide-y">
+                {filteredStudents.map((student) => (
                   <div key={student.enrollmentId} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
                     <div><p className="font-medium">{student.name}</p><p className="mt-0.5 text-xs text-slate-500">{student.id}</p></div>
                     <div className="flex items-center gap-2">
@@ -240,7 +262,7 @@ export default function Page() {
                     </div>
                   </div>
                 ))}
-              </div>
+              </div> : <p className="p-8 text-center text-sm text-slate-500">No students match “{query}”.</p>
             ) : (
               <p className="p-8 text-center text-sm text-slate-500">
                 {loading ? "Loading attendance records…" : classes.length ? `No approved students are enrolled in ${selectedClass?.course_code ?? "this class"}.` : "No classes are currently assigned to your account."}

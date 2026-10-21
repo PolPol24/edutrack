@@ -28,31 +28,29 @@ WHERE p.program_code = 'BSCS'
   AND c.course_code IN ('DCIT 50', 'COSC 60', 'COSC 55', 'DCIT 24', 'GNED 04', 'FITT 3', 'MATH 1', 'INSY 50')
 ON DUPLICATE KEY UPDATE recommended_year = VALUES(recommended_year);
 
--- Instructor choices are distributed between the two faculty demo accounts.
--- Assignments belong to these new class offerings only.
+-- Offerings stay unassigned until the registrar assigns an instructor.
 INSERT INTO course_offerings (course_id, term_id, section_code, faculty_user_id, capacity)
-SELECT c.course_id, t.term_id, seed.section_code, u.user_id, 40
+SELECT c.course_id, t.term_id, seed.section_code, NULL, 40
 FROM (
-  SELECT 'BSCS-2C' AS section_code, 'DCIT 50' AS course_code, 'lord.toletole@edutrack.edu' AS faculty_email
-  UNION ALL SELECT 'BSCS-2C', 'COSC 60', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2C', 'COSC 55', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2C', 'DCIT 24', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2C', 'GNED 04', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2C', 'FITT 3', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2C', 'MATH 1', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2C', 'INSY 50', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2D', 'MATH 1', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2D', 'FITT 3', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2D', 'INSY 50', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2D', 'COSC 55', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2D', 'DCIT 50', 'lord.toletole@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2D', 'DCIT 24', 'faculty@edutrack.edu'
-  UNION ALL SELECT 'BSCS-2D', 'COSC 60', 'lord.toletole@edutrack.edu'
+  SELECT 'BSCS-2C' AS section_code, 'DCIT 50' AS course_code
+  UNION ALL SELECT 'BSCS-2C', 'COSC 60'
+  UNION ALL SELECT 'BSCS-2C', 'COSC 55'
+  UNION ALL SELECT 'BSCS-2C', 'DCIT 24'
+  UNION ALL SELECT 'BSCS-2C', 'GNED 04'
+  UNION ALL SELECT 'BSCS-2C', 'FITT 3'
+  UNION ALL SELECT 'BSCS-2C', 'MATH 1'
+  UNION ALL SELECT 'BSCS-2C', 'INSY 50'
+  UNION ALL SELECT 'BSCS-2D', 'MATH 1'
+  UNION ALL SELECT 'BSCS-2D', 'FITT 3'
+  UNION ALL SELECT 'BSCS-2D', 'INSY 50'
+  UNION ALL SELECT 'BSCS-2D', 'COSC 55'
+  UNION ALL SELECT 'BSCS-2D', 'DCIT 50'
+  UNION ALL SELECT 'BSCS-2D', 'DCIT 24'
+  UNION ALL SELECT 'BSCS-2D', 'COSC 60'
 ) AS seed
 JOIN courses c ON c.course_code = seed.course_code
 JOIN academic_terms t ON t.term_status = 'active'
-JOIN users u ON u.email = seed.faculty_email AND u.role = 'faculty' AND u.account_status = 'active'
-ON DUPLICATE KEY UPDATE offering_status = 'open';
+ON DUPLICATE KEY UPDATE offering_status = 'open', faculty_user_id = NULL;
 
 INSERT INTO class_meetings (offering_id, day_of_week, start_time, end_time, room)
 SELECT co.offering_id, seed.day_of_week, seed.start_time, seed.end_time, seed.room
