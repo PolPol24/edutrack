@@ -1,0 +1,14 @@
+<?php
+return [
+    'host' => '127.0.0.1',
+    'port' => '3306',
+    'database' => 'edutrack_db',
+    'username' => 'root',
+    'password' => '',
+    'allowed_origins' => [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:3001',
+        'http://127.0.0.1:3001',
+    ],
+];

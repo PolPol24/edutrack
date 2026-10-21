@@ -3,13 +3,15 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Eye, EyeOff, GraduationCap, LockKeyhole, Mail } from "lucide-react";
+import { apiRequest } from "@/lib/api";
 
-const demoAccounts = [
-  { role: "Student", email: "student@edutrack.edu", href: "/student/dashboard", color: "bg-blue-100 text-blue-700" },
-  { role: "Faculty", email: "faculty@edutrack.edu", href: "/faculty/dashboard", color: "bg-emerald-100 text-emerald-700" },
-  { role: "Registrar", email: "registrar@edutrack.edu", href: "/registrar/dashboard", color: "bg-amber-100 text-amber-700" },
-  { role: "Admin", email: "admin@edutrack.edu", href: "/admin/dashboard", color: "bg-slate-200 text-slate-700" },
-];
+type Role = "student" | "faculty" | "registrar" | "admin";
+const roleRoutes: Record<Role, string> = {
+  student: "/student/dashboard",
+  faculty: "/faculty/dashboard",
+  registrar: "/registrar/dashboard",
+  admin: "/admin/dashboard",
+};
 
 export default function LoginPage() {
   const router = useRouter();
@@ -18,16 +20,18 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const account = demoAccounts.find((candidate) => candidate.email === email.trim().toLowerCase());
-
-    if (!account || password !== "password") {
-      setError("We couldn’t find a matching account. Check your email and password and try again.");
-      return;
+    setError("");
+    try {
+      const response = await apiRequest<{ user: { role: Role } }>("login", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      });
+      router.push(roleRoutes[response.user.role]);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to sign in.");
     }
-
-    router.push(account.href);
   }
 
   return (
@@ -45,7 +49,7 @@ export default function LoginPage() {
           <h1 className="text-5xl font-semibold leading-[1.12] tracking-tight">Your campus, all in one place.</h1>
           <p className="mt-6 max-w-md text-lg leading-8 text-slate-300">A simpler way for students and staff to stay connected to learning and campus life.</p>
         </div>
-        <p className="relative text-sm text-slate-400">Group: Samson, Tan, Toledo, Tolentino, Vista</p>
+        <p className="relative text-sm text-slate-400">EduTrack University · Student Services</p>
       </section>
 
       <section className="flex items-center justify-center px-6 py-12 sm:px-10">
@@ -84,23 +88,6 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-sm font-semibold text-slate-800">Try a demo account</p>
-            <p className="mt-1 text-xs text-slate-500">All demo accounts use password <span className="font-semibold text-slate-700">password</span>.</p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {demoAccounts.map((account) => (
-                <button key={account.role} type="button" onClick={() => { setEmail(account.email); setPassword("password"); setError(""); }} className="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left transition hover:border-blue-300 hover:bg-blue-50/50">
-                  <span className="min-w-0">
-                    <span className={`mb-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${account.color}`}>{account.role}</span>
-                    <span className="block truncate text-xs text-slate-600">{account.email}</span>
-                  </span>
-                  <ArrowRight size={14} className="shrink-0 text-slate-400" />
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <p className="mt-6 text-center text-xs leading-5 text-slate-400">Demo sign-in only. Connect an authentication service to verify real accounts.</p>
         </div>
       </section>
     </main>

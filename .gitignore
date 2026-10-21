@@ -1,3 +1,7 @@
 node_modules
 .next/
 *.tsbuildinfo
+backend/local_config.php
+.env*
+!.env.example
+*.log

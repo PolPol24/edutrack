@@ -1,0 +1,13 @@
+Options -Indexes
+
+<Files "config.php">
+    Require all denied
+</Files>
+
+<Files "local_config.php">
+    Require all denied
+</Files>
+
+<Files "setup_demo.php">
+    Require all denied
+</Files>
