@@ -118,7 +118,10 @@ CREATE TABLE IF NOT EXISTS student_registration_requests (
   last_name VARCHAR(80) NOT NULL,
   name_suffix VARCHAR(20) NULL,
   date_of_birth DATE NOT NULL,
+  program_id VARCHAR(10) NOT NULL,
+  year_level TINYINT UNSIGNED NOT NULL,
   email VARCHAR(254) NOT NULL,
+  phone VARCHAR(40) NULL,
   password_hash VARCHAR(255) NULL,
   request_status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
   reviewed_by_user_id BIGINT UNSIGNED NULL,
@@ -132,11 +135,33 @@ CREATE TABLE IF NOT EXISTS student_registration_requests (
   UNIQUE KEY uq_registration_pending_student_number (pending_student_number),
   UNIQUE KEY uq_registration_pending_email (pending_email),
   KEY ix_registration_status_created (request_status, created_at),
+  KEY ix_registration_program_year (program_id, year_level),
+  CONSTRAINT chk_registration_year_level CHECK (year_level BETWEEN 1 AND 4),
+  CONSTRAINT fk_registration_program
+    FOREIGN KEY (program_id) REFERENCES programs (program_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_registration_reviewer
     FOREIGN KEY (reviewed_by_user_id) REFERENCES users (user_id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_registration_created_user
     FOREIGN KEY (created_user_id) REFERENCES users (user_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS student_registration_request_documents (
+  document_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  request_id BIGINT UNSIGNED NOT NULL,
+  slot_number TINYINT UNSIGNED NOT NULL,
+  original_filename VARCHAR(255) NOT NULL,
+  storage_filename VARCHAR(40) NOT NULL,
+  size_bytes INT UNSIGNED NOT NULL,
+  uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (document_id),
+  UNIQUE KEY uq_registration_request_document_slot (request_id, slot_number),
+  UNIQUE KEY uq_registration_request_document_storage (storage_filename),
+  CONSTRAINT chk_registration_request_document_slot CHECK (slot_number BETWEEN 1 AND 3),
+  CONSTRAINT fk_registration_request_documents_request
+    FOREIGN KEY (request_id) REFERENCES student_registration_requests (request_id)
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
@@ -356,17 +381,6 @@ ON DUPLICATE KEY UPDATE
   program_id = VALUES(program_id),
   program_name = VALUES(program_name),
   department_id = VALUES(department_id);
-
--- Seed data: two campus registry samples
-INSERT INTO campus_student_registry (student_number, first_name, last_name, student_email, name_suffix, date_of_birth, program_id, year_level, section_code)
-VALUES
-  ('202600001', 'Ariana', 'Santos', 'ariana.santos@cvsu.edu.ph', NULL, '2001-01-01', 'IT-03', 1, 'A'),
-  ('202600002', 'Miguel', 'Reyes', 'miguel.reyes@cvsu.edu.ph', NULL, '2002-02-04', 'IT-03', 2, 'B')
-ON DUPLICATE KEY UPDATE
-  first_name = VALUES(first_name), last_name = VALUES(last_name),
-  student_email = VALUES(student_email), name_suffix = VALUES(name_suffix),
-  date_of_birth = VALUES(date_of_birth), program_id = VALUES(program_id),
-  year_level = VALUES(year_level), section_code = VALUES(section_code);
 
 -- Seed data: academic calendar
 INSERT INTO academic_years (year_label, start_date, end_date, is_current)

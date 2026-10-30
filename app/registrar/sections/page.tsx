@@ -8,7 +8,8 @@ import { apiRequest } from "@/lib/api";
 
 type Program = { program_id: string; program_code: string; program_name: string };
 type Term = { term_id: number; term_name: string; term_status: "active" | "upcoming"; year_label: string };
-type RosterStudent = { student_number: string; first_name: string; last_name: string; name_suffix: string | null; student_email: string; year_level: number; section_code: "A" | "B" | "C" };
+type SectionLetter = "A" | "B" | "C";
+type RosterStudent = { user_id: number; student_number: string; first_name: string; last_name: string; name_suffix: string | null; student_email: string; year_level: number; section_code: SectionLetter | null };
 type SectionOffering = { course_id: string; course_code: string; course_title: string; units: number | string; recommended_year: number; section_letter: "A" | "B" | "C"; section_code: string; offering_id: number | null; course_number: string | null; offering_status: string | null; instructor_name: string | null; enrolled_count: number | string };
 type SectionsData = { programs: Program[]; terms: Term[]; roster: RosterStudent[]; offerings: SectionOffering[] };
 
@@ -143,6 +144,7 @@ export default function Page() {
   const [preparing, setPreparing] = useState(false);
   const [confirmPrepare, setConfirmPrepare] = useState(false);
   const [savingOffering, setSavingOffering] = useState<number | null>(null);
+  const [savingStudent, setSavingStudent] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [formError, setFormError] = useState("");
   const [message, setMessage] = useState("");
@@ -174,6 +176,7 @@ export default function Page() {
   const program = programs.find((item) => item.program_id === programId);
   const term = terms.find((item) => String(item.term_id) === termId);
   const rosterBySection = useMemo(() => Object.fromEntries(letters.map((letter) => [letter, roster.filter((student) => student.section_code === letter)])) as Record<typeof letters[number], RosterStudent[]>, [roster]);
+  const unassignedStudents = useMemo(() => roster.filter((student) => student.section_code === null), [roster]);
   const curriculum = useMemo(() => {
     const unique = new Map<string, SectionOffering>();
     for (const item of offerings) unique.set(item.course_id, item);
@@ -223,8 +226,27 @@ export default function Page() {
     finally { setSavingOffering(null); }
   }
 
+  async function assignStudentSection(student: RosterStudent, sectionCode: SectionLetter) {
+    if (!termId || savingStudent !== null) return;
+    setSavingStudent(student.user_id); setError(""); setMessage("");
+    try {
+      const result = await apiRequest<{ message: string }>("registrar_sections", {
+        method: "PATCH",
+        body: JSON.stringify({ task: "assign_student", student_user_id: student.user_id, term_id: Number(termId), program_id: programId, section_code: sectionCode }),
+      });
+      setMessage(result.message);
+      try {
+        await load(programId, termId);
+      } catch {
+        setError("The assignment was saved, but the section list could not refresh. Reload this page to confirm the latest assignment.");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to assign this student to a section.");
+    } finally { setSavingStudent(null); }
+  }
+
   return <div className="flex min-h-screen bg-[#f8fafc]"><Sidebar role="registrar"/><ActionConfirmation open={confirmPrepare} title={ready ? "Refresh these sections?" : "Form these sections?"} description={`${ready ? "This will refresh" : "This will create"} sections A, B, and C for ${program?.program_code ?? "the selected program"} in ${term?.term_name === "1st semester" ? "1st Semester" : "2nd Semester"}. It will assign students to sections and create or update course offerings and course numbers.`} confirmLabel={ready ? "Refresh sections" : "Form sections"} busy={preparing} error={formError} onCancel={() => { setConfirmPrepare(false); setFormError(""); setExpandedSections(new Set()); }} onConfirm={prepare}/><main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8"><div className="mx-auto max-w-6xl">
-    <div className="mb-7"><p className="text-sm font-medium text-amber-700">Registrar academic setup</p><h1 className="mt-1 text-2xl font-bold">Program sections and course assignments</h1><p className="mt-1 max-w-3xl text-sm text-slate-500">Divide each program roster into sections A, B, and C. Every subject section receives a unique course number. Instructor names are kept as references only; no instructor account or portal is created.</p></div>
+    <div className="mb-7"><p className="text-sm font-medium text-amber-700">Registrar academic setup</p><h1 className="mt-1 text-2xl font-bold">Program sections and course assignments</h1><p className="mt-1 max-w-3xl text-sm text-slate-500">Assign registered students to sections A, B, or C for the selected semester. Every subject section receives a unique course number. Instructor names are kept as references only; no instructor account or portal is created.</p></div>
     {message && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</p>}{error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p>}
       <section className="rounded-2xl border bg-white p-5 sm:p-6">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -256,7 +278,7 @@ export default function Page() {
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 p-4">
           <div>
             <p className="font-semibold">{program?.program_code ?? "Program"} · {term?.term_name === "1st semester" ? "1st Semester" : term?.term_name === "2nd semester" ? "2nd Semester" : "Semester"}</p>
-            <p className="mt-1 text-sm text-slate-500">{roster.length} campus students divided across three sections · {curriculum.length} curriculum subjects</p>
+            <p className="mt-1 text-sm text-slate-500">{roster.length} active students · {unassignedStudents.length} not yet assigned · {curriculum.length} curriculum subjects</p>
           </div>
           <button type="button" onClick={() => { setFormError(""); setConfirmPrepare(true); }} disabled={!programId || !termId || preparing || loading} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300">
             {preparing ? <LoaderCircle size={16} className="animate-spin"/> : <Layers3 size={16}/>}
@@ -297,9 +319,9 @@ export default function Page() {
             {isExpanded && (
               <div id={`section-${letter}-students`} className="max-h-64 divide-y overflow-y-auto border-t">
                 {students.map((student) => (
-                  <div key={student.student_number} className="px-4 py-2.5">
-                    <p className="text-sm font-medium">{student.first_name} {student.last_name}{student.name_suffix ? ` ${student.name_suffix}` : ""}</p>
-                    <p className="text-xs text-slate-500">{student.student_number} · Year {student.year_level}</p>
+                  <div key={student.user_id} className="flex items-center justify-between gap-2 px-4 py-2.5">
+                    <div><p className="text-sm font-medium">{student.first_name} {student.last_name}{student.name_suffix ? ` ${student.name_suffix}` : ""}</p><p className="text-xs text-slate-500">{student.student_number} · Year {student.year_level}</p></div>
+                    <select aria-label={`Assign ${student.first_name} ${student.last_name} to a section`} value={student.section_code ?? ""} disabled={!termId || savingStudent !== null} onChange={(event) => { if (letters.includes(event.target.value as SectionLetter)) void assignStudentSection(student, event.target.value as SectionLetter); }} className="rounded-lg border bg-white px-2 py-1.5 text-xs disabled:bg-slate-100"><option value="" disabled>Assign section</option>{letters.map((option) => <option key={option} value={option}>Section {option}</option>)}</select>
                   </div>
                 ))}
                 {!students.length && <p className="p-4 text-sm text-slate-500">No students assigned.</p>}
@@ -309,6 +331,7 @@ export default function Page() {
         );
       })}
     </div>
+    {unassignedStudents.length > 0 && <section className="mt-5 overflow-hidden rounded-2xl border bg-white"><div className="border-b p-4"><h2 className="font-semibold">Unassigned students</h2><p className="mt-1 text-sm text-slate-500">Choose a section for each registered student.</p></div><div className="divide-y">{unassignedStudents.map((student) => <div key={student.user_id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"><div><p className="text-sm font-medium">{student.first_name} {student.last_name}{student.name_suffix ? ` ${student.name_suffix}` : ""}</p><p className="text-xs text-slate-500">{student.student_number} · Year {student.year_level} · {student.student_email}</p></div><select aria-label={`Assign ${student.first_name} ${student.last_name} to a section`} value={student.section_code ?? ""} disabled={!termId || savingStudent !== null} onChange={(event) => { if (letters.includes(event.target.value as SectionLetter)) void assignStudentSection(student, event.target.value as SectionLetter); }} className="rounded-lg border bg-white px-3 py-2 text-sm disabled:bg-slate-100"><option value="" disabled>Choose section</option>{letters.map((option) => <option key={option} value={option}>Section {option}</option>)}</select></div>)}</div></section>}
     <section className="mt-5 overflow-hidden rounded-2xl border bg-white"><div className="flex items-center gap-3 border-b p-5"><div className="rounded-xl bg-blue-50 p-2.5 text-blue-700"><BookOpen size={18}/></div><div><h2 className="font-semibold">Course numbers and instructor references</h2><p className="mt-1 text-sm text-slate-500">Keep an instructor name with each course section for reference only. Instructor references do not have accounts or portal access.</p></div></div>
       <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3 font-medium">Subject</th><th className="px-5 py-3 font-medium">Section</th><th className="px-5 py-3 font-medium">Course number</th><th className="px-5 py-3 font-medium">Roster</th><th className="px-5 py-3 font-medium">Instructor reference</th></tr></thead><tbody>{orderedOfferings.map((item)=><tr key={`${item.course_id}-${item.section_letter}`} className="border-t"><td className="px-5 py-3.5"><p className="font-semibold">{item.course_code} · {item.course_title}</p><p className="text-xs text-slate-500">Year {item.recommended_year} · {Number(item.units)} units</p></td><td className="px-5 py-3.5">Section {item.section_letter}</td><td className="px-5 py-3.5"><span className="rounded-lg bg-slate-100 px-2.5 py-1.5 font-mono text-xs font-semibold text-slate-700">{item.course_number || "Not generated"}</span></td><td className="px-5 py-3.5">{rosterBySection[item.section_letter].filter((student)=>Number(student.year_level) === Number(item.recommended_year)).length}</td><td className="px-5 py-3.5"><input aria-label={`Instructor reference for ${item.course_code}, section ${item.section_letter}`} disabled={!item.offering_id || savingOffering === item.offering_id} value={item.offering_id !== null ? (instructorNames[item.offering_id] ?? "") : (item.instructor_name ?? "")} onChange={(event)=>{ const offeringId = item.offering_id; if (offeringId !== null) setInstructorNames((current)=>({ ...current, [offeringId]: event.target.value })); }} onBlur={()=>{ if (item.offering_id !== null && (instructorNames[item.offering_id] ?? "") !== (item.instructor_name ?? "")) void assignInstructor(item, instructorNames[item.offering_id] ?? ""); }} placeholder="Name for reference" maxLength={160} className="w-full max-w-xs rounded-lg border bg-white px-3 py-2"/></td></tr>)}{!loading && offerings.length===0&&<tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-slate-500">No curriculum is configured for this program and semester.</td></tr>}{loading&&<tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-slate-500">Loading program sections…</td></tr>}</tbody></table></div>
       <p className="flex items-center gap-2 border-t px-5 py-3 text-xs text-slate-500"><CheckCircle2 size={14} className="text-emerald-600"/>{ready ? `${offerings.length} course sections have unique course numbers.` : "Form sections to generate course numbers and assign instructor references."}</p>

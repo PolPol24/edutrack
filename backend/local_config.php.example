@@ -5,6 +5,10 @@ return [
     'database' => 'edutrack_db',
     'username' => 'root',
     'password' => '',
+    // CompreFace must be self-hosted and reachable only on this computer.
+    'compreface_url' => 'http://127.0.0.1:8000',
+    // Create a Recognition service in the local CompreFace UI and keep its key private.
+    'compreface_api_key' => 'replace-with-local-compreface-service-api-key',
     'allowed_origins' => [
         'http://localhost:3000',
         'http://127.0.0.1:3000',

@@ -27,6 +27,7 @@ type Schedule = {
   term: { term_name: string; year_label: string } | null;
   meetings: Meeting[];
 };
+type MeetingLayout = { meeting: Meeting; startIndex: number; endIndex: number; rowSpan: number; startMinutes: number; endMinutes: number };
 
 function timeInMinutes(value: string) {
   const [hours, minutes] = value.split(":").map(Number);
@@ -56,6 +57,38 @@ export default function StudentSchedulePage() {
     () => Array.from({ length: 22 }, (_, index) => 7 * 60 + index * 30),
     [],
   );
+  const meetingsByDay = useMemo(() => {
+    const startOfDay = slots[0];
+    const endOfDay = slots[slots.length - 1] + 30;
+    const layouts: Record<Day, MeetingLayout[]> = {
+      monday: [],
+      tuesday: [],
+      wednesday: [],
+      thursday: [],
+      friday: [],
+      saturday: [],
+    };
+
+    for (const meeting of schedule?.meetings ?? []) {
+      if (!meeting.day_of_week || !meeting.start_time || !meeting.end_time) continue;
+      const start = timeInMinutes(meeting.start_time);
+      const end = timeInMinutes(meeting.end_time);
+      if (start < startOfDay || end > endOfDay || end <= start) continue;
+      const startIndex = Math.floor((start - startOfDay) / 30);
+      const endIndex = Math.ceil((end - startOfDay) / 30);
+      layouts[meeting.day_of_week].push({ meeting, startIndex, endIndex, rowSpan: endIndex - startIndex, startMinutes: start, endMinutes: end });
+    }
+
+    for (const dayMeetings of Object.values(layouts)) {
+      for (const layout of dayMeetings) {
+        const overlaps = dayMeetings.some((other) =>
+          other !== layout && other.startIndex < layout.endIndex && other.endIndex > layout.startIndex,
+        );
+        if (overlaps) layout.rowSpan = 1;
+      }
+    }
+    return layouts;
+  }, [schedule, slots]);
 
   return (
     <div className="flex min-h-screen bg-[#f8fafc]">
@@ -88,23 +121,23 @@ export default function StudentSchedulePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {slots.map((start) => (
+                  {slots.map((start, slotIndex) => (
                     <tr key={start} className="h-14">
                       <th scope="row" className="sticky left-0 z-10 whitespace-nowrap border-b border-r bg-white px-3 py-2 font-medium text-slate-600">
                         {formatTime(start)} – {formatTime(start + 30)}
                       </th>
                       {days.map((day) => {
-                        const meetings = (schedule?.meetings ?? []).filter((meeting) => {
-                          if (meeting.day_of_week !== day.key || !meeting.start_time || !meeting.end_time) return false;
-                          return timeInMinutes(meeting.start_time) < start + 30
-                            && timeInMinutes(meeting.end_time) > start;
-                        });
+                        const dayMeetings = meetingsByDay[day.key];
+                        if (dayMeetings.some((layout) => layout.startIndex < slotIndex && layout.startIndex + layout.rowSpan > slotIndex)) return null;
+                        const meetings = dayMeetings.filter((layout) => layout.startIndex === slotIndex);
+                        const rowSpan = Math.max(1, ...meetings.map((layout) => layout.rowSpan));
                         return (
-                          <td key={day.key} className="w-[15%] border-b border-r p-1 align-top">
-                            {meetings.map((meeting, index) => (
-                              <div key={`${meeting.course_code}-${meeting.start_time}-${index}`} className="mb-1 rounded-md bg-blue-50 px-2 py-1 text-[11px] leading-4 text-blue-900">
+                          <td key={day.key} rowSpan={rowSpan} className="w-[15%] border-b border-r p-1 align-top">
+                            {meetings.map(({ meeting, rowSpan: meetingSpan, startMinutes, endMinutes }, index) => (
+                              <div key={`${meeting.course_code}-${meeting.start_time}-${index}`} style={{ minHeight: `${meetingSpan * 56 - 12}px` }} className="mb-1 flex flex-col items-center justify-center rounded-md bg-blue-50 px-2 py-1 text-center text-xs leading-5 text-blue-900 sm:text-sm">
                                 <span className="font-semibold">{meeting.course_code}</span>
                                 {meeting.room && <span className="block text-blue-700">{meeting.room}</span>}
+                                {meetingSpan === 1 && <span className="block text-blue-700">{formatTime(startMinutes)} – {formatTime(endMinutes)}</span>}
                               </div>
                             ))}
                           </td>

@@ -212,6 +212,21 @@ try {
         }
     }
 
+    // A weekly attendance trial class for the demo BSIT student.
+    $trialMeeting = $pdo->prepare(
+        'INSERT INTO class_meetings (offering_id, day_of_week, start_time, end_time, room)
+         SELECT co.offering_id, \'friday\', \'16:30:00\', \'18:00:00\', \'Room 201\'
+         FROM course_offerings co
+         JOIN courses c ON c.course_id = co.course_id
+         WHERE co.term_id = :term_id AND co.section_code = \'BSIT-1A\' AND c.course_code = \'DCIT 26\'
+           AND NOT EXISTS (
+             SELECT 1 FROM class_meetings cm
+             WHERE cm.offering_id = co.offering_id AND cm.day_of_week = \'friday\'
+               AND cm.start_time = \'16:30:00\' AND cm.end_time = \'18:00:00\' AND cm.room = \'Room 201\'
+           )'
+    );
+    $trialMeeting->execute(['term_id' => $activeTerm]);
+
     $getStudent = $pdo->prepare('SELECT user_id, student_number FROM users WHERE user_id = :id AND role = \'student\'');
     foreach ([
         'student@edutrack.edu' => 'BSIT-1A',

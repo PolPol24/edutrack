@@ -5,7 +5,15 @@ function send_json(int $status, array $payload): never
 {
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode($payload, JSON_UNESCAPED_SLASHES);
+    try {
+        $json = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
+    } catch (JsonException $error) {
+        error_log('Unable to encode API response: ' . $error->getMessage());
+        http_response_code(500);
+        echo '{"error":"The API response could not be encoded."}';
+        exit;
+    }
+    echo $json;
     exit;
 }
 

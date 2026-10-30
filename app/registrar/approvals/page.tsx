@@ -5,7 +5,6 @@ import { Check, CheckCheck, Clock3, X } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { apiRequest } from "@/lib/api";
 import StudentRegistrationApprovals from "@/components/StudentRegistrationApprovals";
-import StudentDocumentRegistrationApprovals from "@/components/StudentDocumentRegistrationApprovals";
 
 type RequestStatus = "pending" | "approved" | "rejected";
 type EnrollmentRequest = {
@@ -143,7 +142,6 @@ export default function Page() {
       )}
       <main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8">
         <div className="mx-auto max-w-6xl">
-          <StudentDocumentRegistrationApprovals />
           <StudentRegistrationApprovals />
         </div>
         <div className="mx-auto max-w-6xl">

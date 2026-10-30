@@ -4,6 +4,18 @@ const API_URL =
 
 type ApiOptions = Omit<RequestInit, "credentials">;
 
+export function apiUrl(
+  action: string,
+  query: Record<string, string | number> = {},
+): string {
+  const url = new URL(API_URL);
+  url.searchParams.set("action", action);
+  for (const [key, value] of Object.entries(query)) {
+    url.searchParams.set(key, String(value));
+  }
+  return url.toString();
+}
+
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
@@ -16,12 +28,7 @@ export async function apiRequest<T>(
   options: ApiOptions = {},
   query: Record<string, string | number> = {},
 ): Promise<T> {
-  const url = new URL(API_URL);
-  url.searchParams.set("action", action);
-  for (const [key, value] of Object.entries(query)) {
-    url.searchParams.set(key, String(value));
-  }
-  const response = await fetch(url.toString(), {
+  const response = await fetch(apiUrl(action, query), {
     ...options,
     credentials: "include",
     headers: {
@@ -32,7 +39,18 @@ export async function apiRequest<T>(
     },
   });
 
-  const payload: unknown = await response.json().catch(() => null);
+  const responseBody = await response.text();
+  let payload: unknown = null;
+  try {
+    payload = JSON.parse(responseBody);
+  } catch {
+    if (response.ok) {
+      const message = responseBody.trim()
+        ? "EduTrack API returned an invalid response."
+        : "EduTrack API returned an empty response.";
+      throw new ApiError(message, response.status);
+    }
+  }
   if (!response.ok) {
     const message =
       typeof payload === "object" &&
@@ -44,6 +62,10 @@ export async function apiRequest<T>(
     throw new ApiError(message, response.status);
   }
 
+  if (payload === null) {
+    throw new ApiError("EduTrack API returned an empty response.", response.status);
+  }
+
   return payload as T;
 }
 
@@ -51,12 +73,7 @@ export async function apiDownload(
   action: string,
   query: Record<string, string | number> = {},
 ): Promise<Blob> {
-  const url = new URL(API_URL);
-  url.searchParams.set("action", action);
-  for (const [key, value] of Object.entries(query)) {
-    url.searchParams.set(key, String(value));
-  }
-  const response = await fetch(url.toString(), { credentials: "include" });
+  const response = await fetch(apiUrl(action, query), { credentials: "include" });
   if (!response.ok) {
     const payload: unknown = await response.json().catch(() => null);
     const message =

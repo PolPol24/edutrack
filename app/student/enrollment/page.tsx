@@ -24,11 +24,13 @@ type CourseOffering = {
   units: number | string;
   section_code: string;
 };
+type RegistrationDocuments = { year_level: number | null; has_submitted_documents: boolean };
 type EnrollmentAction = { kind: "add"; course: CourseOffering } | { kind: "cancel"; requestCode: string; courseCode: string } | null;
 
 export default function EnrollmentPage() {
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [catalog, setCatalog] = useState<CourseOffering[]>([]);
+  const [registrationDocuments, setRegistrationDocuments] = useState<RegistrationDocuments | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -38,14 +40,18 @@ export default function EnrollmentPage() {
   const enrolledCodes = new Set(enrollments.map((item) => item.course_code));
   const availableCatalog = catalog.filter((course) => !enrolledCodes.has(course.course_code));
   const totalUnits = enrollments.reduce((total, item) => total + Number(item.units), 0);
+  const documentsRequired = Number(registrationDocuments?.year_level) === 1
+    && registrationDocuments?.has_submitted_documents === false;
 
   async function refresh() {
-    const [enrollmentResponse, courseResponse] = await Promise.all([
+    const [enrollmentResponse, courseResponse, registrationResponse] = await Promise.all([
       apiRequest<{ enrollments: Enrollment[] }>("enrollments"),
       apiRequest<{ courses: CourseOffering[] }>("courses"),
+      apiRequest<RegistrationDocuments>("student_document_registrations"),
     ]);
     setEnrollments(enrollmentResponse.enrollments);
     setCatalog(courseResponse.courses);
+    setRegistrationDocuments(registrationResponse);
   }
 
   useEffect(() => {
@@ -141,6 +147,11 @@ export default function EnrollmentPage() {
             </p>
           )}
           {error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p>}
+          {documentsRequired && (
+            <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              First-year students must submit registration documents before enrolling. Please contact the registrar to complete your registration documents.
+            </p>
+          )}
           <section className="overflow-hidden rounded-2xl border bg-white">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
               <div>
@@ -188,7 +199,7 @@ export default function EnrollmentPage() {
                               <X size={15} />Cancel request
                             </button>
                           ) : item.enrollment_status === "rejected" ? (
-                            <button disabled={saving} onClick={() => { setConfirmationError(""); setConfirmation({ kind: "add", course: { offering_id: item.offering_id, course_code: item.course_code, course_title: item.course_title, units: item.units, section_code: item.section_code } }); }} className="inline-flex items-center gap-1 text-blue-700 hover:text-blue-900 disabled:opacity-50">
+                            <button disabled={saving || documentsRequired} onClick={() => { setConfirmationError(""); setConfirmation({ kind: "add", course: { offering_id: item.offering_id, course_code: item.course_code, course_title: item.course_title, units: item.units, section_code: item.section_code } }); }} className="inline-flex items-center gap-1 text-blue-700 hover:text-blue-900 disabled:opacity-50">
                               <Plus size={15} />Submit another request
                             </button>
                           ) : (
@@ -210,7 +221,9 @@ export default function EnrollmentPage() {
           </section>
           <section className="mt-6 rounded-2xl border bg-white p-5">
             <h2 className="font-semibold">Course catalog</h2>
-            <p className="mt-1 text-sm text-slate-500">Available courses you can request to add.</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {documentsRequired ? "Submit your registration documents before requesting enrollment." : "Available courses you can request to add."}
+            </p>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               {availableCatalog.map((course) => (
                 <div key={course.offering_id} className="flex items-center justify-between gap-3 rounded-xl border p-4">
@@ -220,8 +233,8 @@ export default function EnrollmentPage() {
                       {course.units} units · Section {course.section_code} · Request requires registrar approval
                     </p>
                   </div>
-                  <button disabled={saving} onClick={() => { setConfirmationError(""); setConfirmation({ kind: "add", course }); }} className="inline-flex shrink-0 items-center gap-1 rounded-lg border px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">
-                    <Plus size={15} />Add
+                  <button disabled={saving || documentsRequired} onClick={() => { setConfirmationError(""); setConfirmation({ kind: "add", course }); }} className="inline-flex shrink-0 items-center gap-1 rounded-lg border px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50">
+                    <Plus size={15} />{documentsRequired ? "Submit documents first" : "Add"}
                   </button>
                 </div>
               ))}
