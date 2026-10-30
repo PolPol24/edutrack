@@ -1,15 +1,14 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowRight, Eye, EyeOff, GraduationCap, LockKeyhole, Mail } from "lucide-react";
-import { apiRequest } from "@/lib/api";
+import { ApiError, apiRequest } from "@/lib/api";
 
-type Role = "student" | "faculty" | "registrar" | "admin";
+type Role = "student" | "registrar" | "admin";
 const roleRoutes: Record<Role, string> = {
   student: "/student/dashboard",
-  faculty: "/faculty/dashboard",
   registrar: "/registrar/dashboard",
   admin: "/admin/dashboard",
 };
@@ -20,6 +19,25 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    apiRequest<{ user: { role: Role } }>("me")
+      .then(({ user }) => {
+        if (active) router.replace(roleRoutes[user.role]);
+      })
+      .catch((cause: unknown) => {
+        if (!active) return;
+        if (!(cause instanceof ApiError && cause.status === 401)) {
+          setError(cause instanceof Error ? cause.message : "Unable to check your sign-in session.");
+        }
+      })
+      .finally(() => {
+        if (active) setCheckingSession(false);
+      });
+    return () => { active = false; };
+  }, [router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -33,6 +51,10 @@ export default function LoginPage() {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to sign in.");
     }
+  }
+
+  if (checkingSession) {
+    return <main className="grid min-h-screen place-items-center bg-white text-sm text-slate-500">Checking your sign-in session…</main>;
   }
 
   return (

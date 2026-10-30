@@ -1,32 +1,26 @@
 
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, BookOpen, ClipboardList, CalendarCheck, User, LogOut, Users, GraduationCap, FileBarChart, Settings, Layers3 } from "lucide-react";
+import { LayoutDashboard, BookOpen, ClipboardList, User, LogOut, Users, GraduationCap, FileBarChart, Settings, Layers3, CalendarDays, FileUp } from "lucide-react";
 import { apiRequest } from "@/lib/api";
 
 type NavItem = { label: string; href: string; icon: any };
 
-const navByRole: Record<string, NavItem[]> = {
+type Role = "student" | "registrar" | "admin";
+
+const navByRole: Record<Role, NavItem[]> = {
   student: [
     { label: "Dashboard", href: "/student/dashboard", icon: LayoutDashboard },
     { label: "My Courses", href: "/student/courses", icon: BookOpen },
     { label: "Enrollment", href: "/student/enrollment", icon: ClipboardList },
-    { label: "Attendance", href: "/student/attendance", icon: CalendarCheck },
+    { label: "Schedule", href: "/student/schedule", icon: CalendarDays },
     { label: "Profile", href: "/student/profile", icon: User },
-  ],
-  faculty: [
-    { label: "Dashboard", href: "/faculty/dashboard", icon: LayoutDashboard },
-    { label: "My Classes", href: "/faculty/classes", icon: BookOpen },
-    { label: "Grading", href: "/faculty/grading", icon: ClipboardList },
-    { label: "Attendance", href: "/faculty/attendance", icon: CalendarCheck },
-    { label: "Profile", href: "/faculty/profile", icon: User },
   ],
   registrar: [
     { label: "Dashboard", href: "/registrar/dashboard", icon: LayoutDashboard },
     { label: "Students", href: "/registrar/students", icon: GraduationCap },
-    { label: "Faculty", href: "/registrar/faculty", icon: Users },
     { label: "Sections", href: "/registrar/sections", icon: Layers3 },
     { label: "Enrollments", href: "/registrar/enrollments", icon: ClipboardList },
     { label: "Approvals", href: "/registrar/approvals", icon: Users },
@@ -43,13 +37,31 @@ const navByRole: Record<string, NavItem[]> = {
   ],
 };
 
-export default function Sidebar({ role }: { role: "student" | "faculty" | "registrar" | "admin" }) {
+export default function Sidebar({ role }: { role: Role }) {
   const pathname = usePathname();
   const router = useRouter();
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
-  const items = navByRole[role];
+  const [registrationEligible, setRegistrationEligible] = useState(false);
+  const [eligibilityError, setEligibilityError] = useState("");
+  const items = role === "student"
+    ? [
+        ...navByRole.student.slice(0, 3),
+        ...(registrationEligible ? [{ label: "Registration", href: "/student/registration", icon: FileUp }] : []),
+        ...navByRole.student.slice(3),
+      ]
+    : navByRole[role];
+
+  useEffect(() => {
+    if (role !== "student") return;
+    apiRequest<{ profile: { year_level: number | null; active_term_name: string | null } }>("profile")
+      .then(({ profile }) => {
+        setRegistrationEligible(Number(profile.year_level) === 1 && profile.active_term_name === "1st semester");
+        setEligibilityError("");
+      })
+      .catch((cause: unknown) => setEligibilityError(cause instanceof Error ? cause.message : "Unable to check registration eligibility."));
+  }, [role]);
 
   async function handleLogout() {
     setLogoutError("");
@@ -89,6 +101,7 @@ export default function Sidebar({ role }: { role: "student" | "faculty" | "regis
         </section>
       </div>
     )}
+    {eligibilityError && <p role="alert" className="fixed inset-x-2 bottom-16 z-30 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 lg:hidden">{eligibilityError}</p>}
     <aside className="hidden lg:flex w-64 bg-white border-r min-h-screen p-4 flex-col fixed left-0 top-0">
       <div className="flex items-center gap-2 px-2 py-3 mb-6">
         <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center"><GraduationCap size={18}/></div>
@@ -99,6 +112,7 @@ export default function Sidebar({ role }: { role: "student" | "faculty" | "regis
       </div>
 
       <nav className="space-y-1 flex-1">
+        {eligibilityError && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{eligibilityError}</p>}
         {items.map(item => {
           const active = pathname === item.href;
           return (
@@ -115,14 +129,14 @@ export default function Sidebar({ role }: { role: "student" | "faculty" | "regis
         </button>
       </div>
     </aside>
-    <nav aria-label={`${role} navigation`} className="fixed inset-x-0 bottom-0 z-20 flex justify-around border-t bg-white/95 px-1 py-2 shadow-[0_-4px_18px_rgba(15,23,42,0.06)] backdrop-blur lg:hidden">
+    <nav aria-label={`${role} navigation`} className="fixed inset-x-0 bottom-0 z-20 flex justify-start gap-1 overflow-x-auto border-t bg-white/95 px-1 py-2 shadow-[0_-4px_18px_rgba(15,23,42,0.06)] backdrop-blur lg:hidden">
       {items.map((item) => {
         const active = pathname === item.href;
-        return <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} className={`flex min-w-0 flex-1 flex-col items-center gap-1 rounded-lg px-1 py-1.5 text-[10px] font-medium ${active ? "text-blue-600" : "text-slate-500"}`}>
+        return <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} className={`flex min-w-[68px] flex-none flex-col items-center gap-1 rounded-lg px-1 py-1.5 text-[10px] font-medium ${active ? "text-blue-600" : "text-slate-500"}`}>
           <item.icon size={19}/><span className="max-w-full truncate">{item.label}</span>
         </Link>;
       })}
-      <button type="button" onClick={() => { setLogoutError(""); setShowLogoutConfirm(true); }} className="flex min-w-0 flex-1 flex-col items-center gap-1 rounded-lg px-1 py-1.5 text-[10px] font-medium text-slate-500 hover:text-rose-600">
+      <button type="button" onClick={() => { setLogoutError(""); setShowLogoutConfirm(true); }} className="flex min-w-[68px] flex-none flex-col items-center gap-1 rounded-lg px-1 py-1.5 text-[10px] font-medium text-slate-500 hover:text-rose-600">
         <LogOut size={19}/><span className="max-w-full truncate">Log out</span>
       </button>
     </nav>

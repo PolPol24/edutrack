@@ -8,12 +8,19 @@ import { apiRequest } from "@/lib/api";
 
 type Program = { program_id: string; program_code: string; program_name: string };
 type Term = { term_id: number; term_name: string; term_status: "active" | "upcoming"; year_label: string };
-type Faculty = { user_id: number; full_name: string };
 type RosterStudent = { student_number: string; first_name: string; last_name: string; name_suffix: string | null; student_email: string; year_level: number; section_code: "A" | "B" | "C" };
-type SectionOffering = { course_id: string; course_code: string; course_title: string; units: number | string; recommended_year: number; section_letter: "A" | "B" | "C"; section_code: string; offering_id: number | null; course_number: string | null; offering_status: string | null; faculty_user_id: number | null; faculty_name: string | null; enrolled_count: number | string };
-type SectionsData = { programs: Program[]; terms: Term[]; faculty: Faculty[]; roster: RosterStudent[]; offerings: SectionOffering[] };
+type SectionOffering = { course_id: string; course_code: string; course_title: string; units: number | string; recommended_year: number; section_letter: "A" | "B" | "C"; section_code: string; offering_id: number | null; course_number: string | null; offering_status: string | null; instructor_name: string | null; enrolled_count: number | string };
+type SectionsData = { programs: Program[]; terms: Term[]; roster: RosterStudent[]; offerings: SectionOffering[] };
 
 const letters = ["A", "B", "C"] as const;
+
+function instructorNameMap(offerings: SectionOffering[]) {
+  const names: Record<number, string> = {};
+  for (const offering of offerings) {
+    if (offering.offering_id !== null) names[offering.offering_id] = offering.instructor_name ?? "";
+  }
+  return names;
+}
 
 type DropdownOption = { value: string; label: string };
 
@@ -126,9 +133,9 @@ function PlaceholderDropdown({
 export default function Page() {
   const [programs, setPrograms] = useState<Program[]>([]);
   const [terms, setTerms] = useState<Term[]>([]);
-  const [faculty, setFaculty] = useState<Faculty[]>([]);
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [offerings, setOfferings] = useState<SectionOffering[]>([]);
+  const [instructorNames, setInstructorNames] = useState<Record<number, string>>({});
   const [programId, setProgramId] = useState("");
   const [termId, setTermId] = useState("");
   const [expandedSections, setExpandedSections] = useState<Set<(typeof letters)[number]>>(() => new Set());
@@ -144,9 +151,9 @@ export default function Page() {
     const data = await apiRequest<SectionsData>("registrar_sections", {}, selectedProgram && selectedTerm ? { program_id: selectedProgram, term_id: selectedTerm } : {});
     setPrograms(data.programs);
     setTerms(data.terms);
-    setFaculty(data.faculty);
     setRoster(data.roster);
     setOfferings(data.offerings);
+    setInstructorNames(instructorNameMap(data.offerings));
   }, [programId, termId]);
 
   useEffect(() => {
@@ -159,7 +166,7 @@ export default function Page() {
     let active = true;
     setError("");
     apiRequest<SectionsData>("registrar_sections", {}, { program_id: programId, term_id: termId })
-      .then((data) => { if (active) { setRoster(data.roster); setOfferings(data.offerings); setFaculty(data.faculty); } })
+      .then((data) => { if (active) { setRoster(data.roster); setOfferings(data.offerings); setInstructorNames(instructorNameMap(data.offerings)); } })
       .catch((cause: unknown) => { if (active) setError(cause instanceof Error ? cause.message : "Unable to load program sections."); });
     return () => { active = false; };
   }, [programId, termId]);
@@ -205,11 +212,11 @@ export default function Page() {
     }
   }
 
-  async function assignFaculty(offering: SectionOffering, value: string) {
+  async function assignInstructor(offering: SectionOffering, value: string) {
     if (!offering.offering_id) return;
     setSavingOffering(offering.offering_id); setError(""); setMessage("");
     try {
-      const result = await apiRequest<{ message: string }>("registrar_sections", { method: "PATCH", body: JSON.stringify({ offering_id: offering.offering_id, faculty_user_id: value }) });
+      const result = await apiRequest<{ message: string }>("registrar_sections", { method: "PATCH", body: JSON.stringify({ offering_id: offering.offering_id, instructor_name: value }) });
       setMessage(result.message);
       await load(programId, termId);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to assign this instructor."); }
@@ -217,7 +224,7 @@ export default function Page() {
   }
 
   return <div className="flex min-h-screen bg-[#f8fafc]"><Sidebar role="registrar"/><ActionConfirmation open={confirmPrepare} title={ready ? "Refresh these sections?" : "Form these sections?"} description={`${ready ? "This will refresh" : "This will create"} sections A, B, and C for ${program?.program_code ?? "the selected program"} in ${term?.term_name === "1st semester" ? "1st Semester" : "2nd Semester"}. It will assign students to sections and create or update course offerings and course numbers.`} confirmLabel={ready ? "Refresh sections" : "Form sections"} busy={preparing} error={formError} onCancel={() => { setConfirmPrepare(false); setFormError(""); setExpandedSections(new Set()); }} onConfirm={prepare}/><main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8"><div className="mx-auto max-w-6xl">
-    <div className="mb-7"><p className="text-sm font-medium text-amber-700">Registrar academic setup</p><h1 className="mt-1 text-2xl font-bold">Program sections and course assignments</h1><p className="mt-1 max-w-3xl text-sm text-slate-500">Divide each program roster into sections A, B, and C. Every subject section receives a unique course number, which the registrar uses to assign its faculty member.</p></div>
+    <div className="mb-7"><p className="text-sm font-medium text-amber-700">Registrar academic setup</p><h1 className="mt-1 text-2xl font-bold">Program sections and course assignments</h1><p className="mt-1 max-w-3xl text-sm text-slate-500">Divide each program roster into sections A, B, and C. Every subject section receives a unique course number. Instructor names are kept as references only; no instructor account or portal is created.</p></div>
     {message && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</p>}{error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p>}
       <section className="rounded-2xl border bg-white p-5 sm:p-6">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -302,9 +309,9 @@ export default function Page() {
         );
       })}
     </div>
-    <section className="mt-5 overflow-hidden rounded-2xl border bg-white"><div className="flex items-center gap-3 border-b p-5"><div className="rounded-xl bg-blue-50 p-2.5 text-blue-700"><BookOpen size={18}/></div><div><h2 className="font-semibold">Course numbers and faculty</h2><p className="mt-1 text-sm text-slate-500">Assign faculty separately for each subject and section. Faculty will see the same course number on their class list.</p></div></div>
-      <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3 font-medium">Subject</th><th className="px-5 py-3 font-medium">Section</th><th className="px-5 py-3 font-medium">Course number</th><th className="px-5 py-3 font-medium">Roster</th><th className="px-5 py-3 font-medium">Faculty assignment</th></tr></thead><tbody>{orderedOfferings.map((item)=><tr key={`${item.course_id}-${item.section_letter}`} className="border-t"><td className="px-5 py-3.5"><p className="font-semibold">{item.course_code} · {item.course_title}</p><p className="text-xs text-slate-500">Year {item.recommended_year} · {Number(item.units)} units</p></td><td className="px-5 py-3.5">Section {item.section_letter}</td><td className="px-5 py-3.5"><span className="rounded-lg bg-slate-100 px-2.5 py-1.5 font-mono text-xs font-semibold text-slate-700">{item.course_number || "Not generated"}</span></td><td className="px-5 py-3.5">{rosterBySection[item.section_letter].filter((student)=>Number(student.year_level) === Number(item.recommended_year)).length}</td><td className="px-5 py-3.5"><select aria-label={`Faculty for ${item.course_code}, section ${item.section_letter}`} disabled={!item.offering_id || savingOffering === item.offering_id} value={item.faculty_user_id ? String(item.faculty_user_id) : ""} onChange={(event)=>void assignFaculty(item,event.target.value)} className="w-full max-w-xs rounded-lg border bg-white px-3 py-2"><option value="">Unassigned</option>{faculty.map((member)=><option key={member.user_id} value={member.user_id}>{member.full_name}</option>)}</select>{item.offering_id !== null && savingOffering === item.offering_id && <span className="ml-2 text-xs text-slate-500">Saving…</span>}</td></tr>)}{!loading && offerings.length===0&&<tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-slate-500">No curriculum is configured for this program and semester.</td></tr>}{loading&&<tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-slate-500">Loading program sections…</td></tr>}</tbody></table></div>
-      <p className="flex items-center gap-2 border-t px-5 py-3 text-xs text-slate-500"><CheckCircle2 size={14} className="text-emerald-600"/>{ready ? `${offerings.length} course sections have unique course numbers.` : "Form sections to generate course numbers and enable faculty assignments."}</p>
+    <section className="mt-5 overflow-hidden rounded-2xl border bg-white"><div className="flex items-center gap-3 border-b p-5"><div className="rounded-xl bg-blue-50 p-2.5 text-blue-700"><BookOpen size={18}/></div><div><h2 className="font-semibold">Course numbers and instructor references</h2><p className="mt-1 text-sm text-slate-500">Keep an instructor name with each course section for reference only. Instructor references do not have accounts or portal access.</p></div></div>
+      <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3 font-medium">Subject</th><th className="px-5 py-3 font-medium">Section</th><th className="px-5 py-3 font-medium">Course number</th><th className="px-5 py-3 font-medium">Roster</th><th className="px-5 py-3 font-medium">Instructor reference</th></tr></thead><tbody>{orderedOfferings.map((item)=><tr key={`${item.course_id}-${item.section_letter}`} className="border-t"><td className="px-5 py-3.5"><p className="font-semibold">{item.course_code} · {item.course_title}</p><p className="text-xs text-slate-500">Year {item.recommended_year} · {Number(item.units)} units</p></td><td className="px-5 py-3.5">Section {item.section_letter}</td><td className="px-5 py-3.5"><span className="rounded-lg bg-slate-100 px-2.5 py-1.5 font-mono text-xs font-semibold text-slate-700">{item.course_number || "Not generated"}</span></td><td className="px-5 py-3.5">{rosterBySection[item.section_letter].filter((student)=>Number(student.year_level) === Number(item.recommended_year)).length}</td><td className="px-5 py-3.5"><input aria-label={`Instructor reference for ${item.course_code}, section ${item.section_letter}`} disabled={!item.offering_id || savingOffering === item.offering_id} value={item.offering_id !== null ? (instructorNames[item.offering_id] ?? "") : (item.instructor_name ?? "")} onChange={(event)=>{ const offeringId = item.offering_id; if (offeringId !== null) setInstructorNames((current)=>({ ...current, [offeringId]: event.target.value })); }} onBlur={()=>{ if (item.offering_id !== null && (instructorNames[item.offering_id] ?? "") !== (item.instructor_name ?? "")) void assignInstructor(item, instructorNames[item.offering_id] ?? ""); }} placeholder="Name for reference" maxLength={160} className="w-full max-w-xs rounded-lg border bg-white px-3 py-2"/></td></tr>)}{!loading && offerings.length===0&&<tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-slate-500">No curriculum is configured for this program and semester.</td></tr>}{loading&&<tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-slate-500">Loading program sections…</td></tr>}</tbody></table></div>
+      <p className="flex items-center gap-2 border-t px-5 py-3 text-xs text-slate-500"><CheckCircle2 size={14} className="text-emerald-600"/>{ready ? `${offerings.length} course sections have unique course numbers.` : "Form sections to generate course numbers and assign instructor references."}</p>
     </section>
   </div></main></div>;
 }

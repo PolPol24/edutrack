@@ -3,30 +3,6 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/config.php';
 
-function active_faculty_offering(PDO $pdo, int $offeringId, int $facultyId): array
-{
-    $statement = $pdo->prepare(
-        'SELECT co.offering_id, c.course_code, c.course_title, co.section_code
-         FROM course_offerings co
-         JOIN courses c ON c.course_id = co.course_id
-         JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status IN (\'active\', \'upcoming\')
-         WHERE co.offering_id = :offering_id
-           AND co.faculty_user_id = :faculty_user_id
-           AND co.offering_status = \'open\' AND c.course_status = \'active\'
-         LIMIT 1'
-    );
-    $statement->execute([
-        'offering_id' => $offeringId,
-        'faculty_user_id' => $facultyId,
-    ]);
-    $offering = $statement->fetch();
-    if (!$offering) {
-        send_json(404, ['error' => 'That class is not assigned to your account in an active or upcoming term.']);
-    }
-
-    return $offering;
-}
-
 function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null): array
 {
     $name = trim((string)($body['full_name'] ?? ''));
@@ -34,7 +10,7 @@ function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null):
     $role = $forcedRole ?? strtolower(trim((string)($body['role'] ?? '')));
     $password = (string)($body['password'] ?? 'password');
     if ($name === '' || mb_strlen($name) > 160 || !filter_var($email, FILTER_VALIDATE_EMAIL)
-        || !in_array($role, ['student', 'faculty', 'registrar', 'admin'], true)
+        || !in_array($role, ['student', 'registrar', 'admin'], true)
         || strlen($password) < 8) {
         send_json(422, ['error' => 'Provide a valid name, email, role, and password of at least 8 characters.']);
     }
@@ -66,13 +42,15 @@ function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null):
         if ($studentNumber === '') {
             do {
                 $studentNumber = date('Y') . str_pad((string)random_int(0, 99999), 5, '0', STR_PAD_LEFT);
-                $checkNumber = $pdo->prepare('SELECT 1 FROM student_profiles WHERE student_number = :student_number');
+                $checkNumber = $pdo->prepare('SELECT 1 FROM users WHERE student_number = :student_number');
                 $checkNumber->execute(['student_number' => $studentNumber]);
             } while ($checkNumber->fetchColumn());
         }
         $profile = $pdo->prepare(
-            'INSERT INTO student_profiles (user_id, student_number, program_id, year_level)
-             VALUES (:user_id, :student_number, :program_id, :year_level)'
+            'UPDATE users
+             SET student_number = :student_number, program_id = :program_id,
+                 year_level = :year_level, student_status = \'active\'
+             WHERE user_id = :user_id'
         );
         $profile->execute([
             'user_id' => $userId,
@@ -80,15 +58,16 @@ function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null):
             'program_id' => $programId,
             'year_level' => $yearLevel,
         ]);
-    } elseif (in_array($role, ['faculty', 'registrar'], true)) {
+    } elseif ($role === 'registrar') {
         $departmentId = filter_var($body['department_id'] ?? null, FILTER_VALIDATE_INT) ?: null;
         $employeeNumber = trim((string)($body['employee_number'] ?? ''));
         if ($employeeNumber === '') {
             $employeeNumber = strtoupper(substr($role, 0, 3)) . '-' . str_pad((string)$userId, 6, '0', STR_PAD_LEFT);
         }
         $profile = $pdo->prepare(
-            'INSERT INTO employee_profiles (user_id, employee_number, department_id, office)
-             VALUES (:user_id, :employee_number, :department_id, :office)'
+            'UPDATE users SET employee_number = :employee_number,
+                 department_id = :department_id, office = :office
+             WHERE user_id = :user_id'
         );
         $profile->execute([
             'user_id' => $userId,
@@ -102,10 +81,49 @@ function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null):
     return ['user_id' => $userId, 'full_name' => $name, 'email' => $email, 'role' => $role, 'account_status' => 'active'];
 }
 
+$storedUploads = [];
+
+function student_registration_term(PDO $pdo, int $userId): ?array
+{
+    $statement = $pdo->prepare(
+        'SELECT u.year_level, t.term_id, t.term_name, ay.year_label
+         FROM users u
+         LEFT JOIN academic_terms t ON t.term_status = \'active\'
+         LEFT JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
+         WHERE u.user_id = :user_id
+         ORDER BY t.start_date DESC
+         LIMIT 1'
+    );
+    $statement->execute(['user_id' => $userId]);
+    $term = $statement->fetch();
+    return $term ?: null;
+}
+
+function student_registration_is_eligible(?array $term): bool
+{
+    return $term !== null
+        && (int)$term['year_level'] === 1
+        && $term['term_name'] === '1st semester'
+        && $term['term_id'] !== null;
+}
+
+function private_registration_storage_directory(): string
+{
+    global $localConfig;
+    $configured = $localConfig['private_storage_path'] ?? null;
+    return is_string($configured) && trim($configured) !== ''
+        ? rtrim($configured, "\\/")
+        : dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'edutrack-private';
+}
+
 try {
     $action = $_GET['action'] ?? '';
     $method = $_SERVER['REQUEST_METHOD'] ?? '';
     $pdo = database();
+
+    if (in_array($action, ['faculty_classes', 'faculty_grades', 'faculty_attendance'], true)) {
+        send_json(404, ['error' => 'Faculty portal workflows are no longer available.']);
+    }
 
     if ($action === 'student_registrations') {
         if ($method === 'POST') {
@@ -136,7 +154,7 @@ try {
             $duplicate = $pdo->prepare(
                 'SELECT 1 FROM users WHERE email = :email
                  UNION ALL
-                 SELECT 1 FROM student_profiles WHERE student_number = :student_number
+                 SELECT 1 FROM users WHERE student_number = :student_number
                  UNION ALL
                  SELECT 1 FROM student_registration_requests
                    WHERE request_status = \'pending\'
@@ -237,7 +255,7 @@ try {
                 $yearLevel = (int)$registration['year_level'];
                 $existing = $pdo->prepare(
                     'SELECT 1 FROM users WHERE email = :email
-                     UNION ALL SELECT 1 FROM student_profiles WHERE student_number = :student_number LIMIT 1'
+                     UNION ALL SELECT 1 FROM users WHERE student_number = :student_number LIMIT 1'
                 );
                 $existing->execute([
                     'email' => $registration['email'],
@@ -254,22 +272,19 @@ try {
                     $registration['name_suffix'],
                 ], static fn($part) => $part !== null && $part !== '')));
                 $createUser = $pdo->prepare(
-                    'INSERT INTO users (full_name, email, password_hash, role, account_status)
-                     VALUES (:full_name, :email, :password_hash, \'student\', \'active\')'
+                    'INSERT INTO users
+                       (full_name, email, password_hash, role, account_status, student_number,
+                        first_name, last_name, name_suffix, date_of_birth, program_id, year_level,
+                        student_status)
+                     VALUES
+                       (:full_name, :email, :password_hash, \'student\', \'active\', :student_number,
+                        :first_name, :last_name, :name_suffix, :date_of_birth, :program_id, :year_level,
+                        \'active\')'
                 );
                 $createUser->execute([
                     'full_name' => $fullName,
                     'email' => $registration['email'],
                     'password_hash' => $registration['password_hash'],
-                ]);
-                $createdUserId = (int)$pdo->lastInsertId();
-                $createProfile = $pdo->prepare(
-                    'INSERT INTO student_profiles
-                       (user_id, student_number, first_name, last_name, name_suffix, date_of_birth, program_id, year_level)
-                     VALUES (:user_id, :student_number, :first_name, :last_name, :name_suffix, :date_of_birth, :program_id, :year_level)'
-                );
-                $createProfile->execute([
-                    'user_id' => $createdUserId,
                     'student_number' => $registration['student_number'],
                     'first_name' => $registration['first_name'],
                     'last_name' => $registration['last_name'],
@@ -278,6 +293,7 @@ try {
                     'program_id' => $programId,
                     'year_level' => $yearLevel,
                 ]);
+                $createdUserId = (int)$pdo->lastInsertId();
             }
 
             $update = $pdo->prepare(
@@ -376,15 +392,18 @@ try {
         if ($method === 'GET') {
             $statement = $pdo->prepare(
                 'SELECT u.user_id, u.full_name, u.email, u.phone, u.address, u.role,
-                        sp.student_number, sp.first_name, sp.last_name, sp.name_suffix, sp.date_of_birth,
-                        sp.year_level, sp.student_status,
+                        u.student_number, u.first_name, u.last_name, u.name_suffix, u.date_of_birth,
+                        u.year_level, u.student_status,
                         p.program_code, p.program_name, d.department_name,
-                        ep.employee_number, ep.office, ep.hire_date
+                        u.employee_number, u.office, u.hire_date,
+                        (SELECT t.term_name FROM academic_terms t
+                         WHERE t.term_status = \'active\' ORDER BY t.start_date DESC LIMIT 1) AS active_term_name,
+                        (SELECT ay.year_label FROM academic_terms t
+                         JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
+                         WHERE t.term_status = \'active\' ORDER BY t.start_date DESC LIMIT 1) AS active_year_label
                  FROM users u
-                 LEFT JOIN student_profiles sp ON sp.user_id = u.user_id
-                 LEFT JOIN programs p ON p.program_id = sp.program_id
-                 LEFT JOIN employee_profiles ep ON ep.user_id = u.user_id
-                 LEFT JOIN departments d ON d.department_id = ep.department_id
+                 LEFT JOIN programs p ON p.program_id = u.program_id
+                 LEFT JOIN departments d ON d.department_id = u.department_id
                  WHERE u.user_id = :user_id'
             );
             $statement->execute(['user_id' => $user['user_id']]);
@@ -392,34 +411,304 @@ try {
         }
         if ($method === 'PATCH') {
             $body = request_body();
-            $name = trim((string)($body['full_name'] ?? ''));
-            $email = strtolower(trim((string)($body['email'] ?? '')));
+            if ((array_key_exists('full_name', $body)
+                    && trim((string)$body['full_name']) !== $user['full_name'])
+                || (array_key_exists('email', $body)
+                    && strtolower(trim((string)$body['email'])) !== $user['email'])) {
+                send_json(403, ['error' => 'Your name and school email are read-only. Contact an administrator to request a correction.']);
+            }
             $phone = trim((string)($body['phone'] ?? ''));
             $address = trim((string)($body['address'] ?? ''));
             $office = trim((string)($body['office'] ?? ''));
-            if ($name === '' || mb_strlen($name) > 160 || !filter_var($email, FILTER_VALIDATE_EMAIL)
-                || strlen($email) > 254 || strlen($phone) > 40 || strlen($address) > 255 || strlen($office) > 160) {
-                send_json(422, ['error' => 'Check the name, email, and contact field lengths.']);
+            if (strlen($phone) > 40 || strlen($address) > 255 || strlen($office) > 160) {
+                send_json(422, ['error' => 'Check the contact field lengths.']);
             }
             $update = $pdo->prepare(
-                'UPDATE users SET full_name = :full_name, email = :email, phone = :phone, address = :address
-                 WHERE user_id = :user_id'
+                'UPDATE users SET phone = :phone, address = :address WHERE user_id = :user_id'
             );
             $update->execute([
-                'full_name' => $name, 'email' => $email,
                 'phone' => $phone !== '' ? $phone : null,
                 'address' => $address !== '' ? $address : null,
                 'user_id' => $user['user_id'],
             ]);
-            if (in_array($user['role'], ['faculty', 'registrar'], true)) {
-                $staff = $pdo->prepare('UPDATE employee_profiles SET office = :office WHERE user_id = :user_id');
+            if (in_array($user['role'], ['registrar', 'admin'], true)) {
+                $staff = $pdo->prepare('UPDATE users SET office = :office WHERE user_id = :user_id');
                 $staff->execute(['office' => $office !== '' ? $office : null, 'user_id' => $user['user_id']]);
             }
-            $_SESSION['edutrack_user']['full_name'] = $name;
-            $_SESSION['edutrack_user']['email'] = $email;
             send_json(200, ['message' => 'Profile changes were saved.', 'user' => $_SESSION['edutrack_user']]);
         }
         request_method('GET');
+    }
+
+    if ($action === 'student_schedule') {
+        request_method('GET');
+        $user = require_user('student');
+        $term = $pdo->query(
+            'SELECT t.term_id, t.term_name, ay.year_label
+             FROM academic_terms t
+             JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
+             WHERE t.term_status = \'active\'
+             ORDER BY t.start_date DESC
+             LIMIT 1'
+        )->fetch();
+        if (!$term) {
+            send_json(200, ['term' => null, 'meetings' => []]);
+        }
+        $statement = $pdo->prepare(
+            'SELECT c.course_code, c.course_title, co.section_code, cm.day_of_week,
+                    cm.start_time, cm.end_time, cm.room
+             FROM enrollments e
+             JOIN course_offerings co ON co.offering_id = e.offering_id
+             JOIN courses c ON c.course_id = co.course_id
+             JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status = \'active\'
+             LEFT JOIN class_meetings cm ON cm.offering_id = co.offering_id
+             WHERE e.student_user_id = :student_user_id
+               AND e.enrollment_status = \'approved\'
+             ORDER BY FIELD(cm.day_of_week, \'monday\', \'tuesday\', \'wednesday\', \'thursday\', \'friday\', \'saturday\'),
+                      cm.start_time, c.course_code'
+        );
+        $statement->execute(['student_user_id' => $user['user_id']]);
+        send_json(200, [
+            'term' => ['term_name' => $term['term_name'], 'year_label' => $term['year_label']],
+            'meetings' => $statement->fetchAll(),
+        ]);
+    }
+
+    if ($action === 'student_document_registrations') {
+        $student = require_user('student');
+        $term = student_registration_term($pdo, (int)$student['user_id']);
+        $eligible = student_registration_is_eligible($term);
+
+        if ($method === 'GET') {
+            $request = null;
+            if ($eligible) {
+                $latest = $pdo->prepare(
+                    'SELECT request_id, request_status, submitted_at, reviewed_at, decision_note
+                     FROM student_document_registration_requests
+                     WHERE student_user_id = :student_user_id AND term_id = :term_id
+                     ORDER BY submitted_at DESC
+                     LIMIT 1'
+                );
+                $latest->execute([
+                    'student_user_id' => $student['user_id'],
+                    'term_id' => $term['term_id'],
+                ]);
+                $request = $latest->fetch() ?: null;
+                if ($request) {
+                    $documents = $pdo->prepare(
+                        'SELECT document_id, slot_number, original_filename, size_bytes
+                         FROM student_registration_documents
+                         WHERE request_id = :request_id
+                         ORDER BY slot_number'
+                    );
+                    $documents->execute(['request_id' => $request['request_id']]);
+                    $request['documents'] = $documents->fetchAll();
+                }
+            }
+            send_json(200, [
+                'eligible' => $eligible,
+                'year_level' => $term['year_level'] ?? null,
+                'term_name' => $term['term_name'] ?? null,
+                'year_label' => $term['year_label'] ?? null,
+                'request' => $request,
+            ]);
+        }
+
+        request_method('POST');
+        if (!$eligible) {
+            send_json(403, ['error' => 'Document registration is available only to first-year students during the active first semester.']);
+        }
+
+        $uploads = [];
+        for ($slot = 1; $slot <= 3; $slot++) {
+            $field = 'document_' . $slot;
+            $file = $_FILES[$field] ?? null;
+            if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+                send_json(422, ['error' => 'Select a PDF file for all three document slots.']);
+            }
+            if (!is_uploaded_file((string)$file['tmp_name'])
+                || (int)$file['size'] < 1
+                || (int)$file['size'] > 10 * 1024 * 1024) {
+                send_json(422, ['error' => 'Each PDF must be smaller than or equal to 10 MB.']);
+            }
+            $originalFilename = trim(basename(str_replace('\\', '/', (string)$file['name'])));
+            if ($originalFilename === '' || strlen($originalFilename) > 255
+                || strtolower(pathinfo($originalFilename, PATHINFO_EXTENSION)) !== 'pdf') {
+                send_json(422, ['error' => 'Upload PDF files with a valid .pdf filename.']);
+            }
+            $finfo = new finfo(FILEINFO_MIME_TYPE);
+            if ($finfo->file((string)$file['tmp_name']) !== 'application/pdf') {
+                send_json(422, ['error' => 'The selected file is not a valid PDF.']);
+            }
+            $uploads[] = [
+                'slot_number' => $slot,
+                'tmp_name' => (string)$file['tmp_name'],
+                'original_filename' => $originalFilename,
+                'size_bytes' => (int)$file['size'],
+                'storage_filename' => bin2hex(random_bytes(16)) . '.pdf',
+            ];
+        }
+
+        $pdo->beginTransaction();
+        $lockStudent = $pdo->prepare(
+            'SELECT user_id FROM users WHERE user_id = :user_id AND role = \'student\' FOR UPDATE'
+        );
+        $lockStudent->execute(['user_id' => $student['user_id']]);
+        if (!$lockStudent->fetchColumn()) {
+            $pdo->rollBack();
+            send_json(404, ['error' => 'Student account not found.']);
+        }
+        $existing = $pdo->prepare(
+            'SELECT request_status FROM student_document_registration_requests
+             WHERE student_user_id = :student_user_id AND term_id = :term_id
+             ORDER BY submitted_at DESC LIMIT 1 FOR UPDATE'
+        );
+        $existing->execute([
+            'student_user_id' => $student['user_id'],
+            'term_id' => $term['term_id'],
+        ]);
+        $lastRequestStatus = $existing->fetchColumn();
+        if (in_array($lastRequestStatus, ['pending', 'approved'], true)) {
+            $pdo->rollBack();
+            send_json(409, ['error' => $lastRequestStatus === 'pending'
+                ? 'Your registration documents are already awaiting registrar review.'
+                : 'Your registration documents have already been approved for this semester.']);
+        }
+
+        $storageDirectory = private_registration_storage_directory()
+            . DIRECTORY_SEPARATOR . 'registration-documents';
+        if (!is_dir($storageDirectory)
+            && !mkdir($storageDirectory, 0700, true)
+            && !is_dir($storageDirectory)) {
+            throw new RuntimeException('Unable to create private registration document storage.');
+        }
+        $insertRequest = $pdo->prepare(
+            'INSERT INTO student_document_registration_requests (student_user_id, term_id)
+             VALUES (:student_user_id, :term_id)'
+        );
+        $insertRequest->execute([
+            'student_user_id' => $student['user_id'],
+            'term_id' => $term['term_id'],
+        ]);
+        $requestId = (int)$pdo->lastInsertId();
+        $insertDocument = $pdo->prepare(
+            'INSERT INTO student_registration_documents
+               (request_id, slot_number, original_filename, storage_filename, size_bytes)
+             VALUES (:request_id, :slot_number, :original_filename, :storage_filename, :size_bytes)'
+        );
+        foreach ($uploads as $upload) {
+            $destination = $storageDirectory . DIRECTORY_SEPARATOR . $upload['storage_filename'];
+            if (!move_uploaded_file($upload['tmp_name'], $destination)) {
+                throw new RuntimeException('Unable to store a submitted registration document.');
+            }
+            $storedUploads[] = $destination;
+            $insertDocument->execute([
+                'request_id' => $requestId,
+                'slot_number' => $upload['slot_number'],
+                'original_filename' => $upload['original_filename'],
+                'storage_filename' => $upload['storage_filename'],
+                'size_bytes' => $upload['size_bytes'],
+            ]);
+        }
+        $pdo->commit();
+        $storedUploads = [];
+        send_json(201, ['message' => 'Your registration documents were sent to the registrar for review.']);
+    }
+
+    if ($action === 'registrar_student_document_registrations') {
+        $registrar = require_user('registrar');
+        if ($method === 'GET') {
+            $requests = $pdo->query(
+                'SELECT r.request_id, r.request_status, r.submitted_at, r.reviewed_at, r.decision_note,
+                        u.full_name, u.student_number, p.program_name, u.year_level,
+                        t.term_name, ay.year_label
+                 FROM student_document_registration_requests r
+                 JOIN users u ON u.user_id = r.student_user_id
+                 LEFT JOIN programs p ON p.program_id = u.program_id
+                 JOIN academic_terms t ON t.term_id = r.term_id
+                 JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
+                 ORDER BY CASE r.request_status WHEN \'pending\' THEN 0 ELSE 1 END, r.submitted_at DESC'
+            )->fetchAll();
+            if ($requests) {
+                $documents = $pdo->prepare(
+                    'SELECT document_id, request_id, slot_number, original_filename, size_bytes
+                     FROM student_registration_documents
+                     WHERE request_id IN (' . implode(',', array_map(
+                        static fn(array $request): string => (string)(int)$request['request_id'],
+                        $requests
+                    )) . ')
+                     ORDER BY request_id, slot_number'
+                );
+                $documents->execute();
+                $documentsByRequest = [];
+                foreach ($documents->fetchAll() as $document) {
+                    $documentsByRequest[$document['request_id']][] = $document;
+                }
+                foreach ($requests as &$request) {
+                    $request['documents'] = $documentsByRequest[$request['request_id']] ?? [];
+                }
+                unset($request);
+            }
+            send_json(200, ['requests' => $requests]);
+        }
+        if ($method === 'PATCH') {
+            $body = request_body();
+            $requestId = filter_var($body['request_id'] ?? null, FILTER_VALIDATE_INT);
+            $status = (string)($body['status'] ?? '');
+            $note = trim((string)($body['decision_note'] ?? ''));
+            if (!$requestId || !in_array($status, ['approved', 'rejected'], true) || mb_strlen($note) > 500) {
+                send_json(422, ['error' => 'Choose an existing request, a decision, and a note no longer than 500 characters.']);
+            }
+            $decision = $pdo->prepare(
+                'UPDATE student_document_registration_requests
+                 SET request_status = :status, reviewed_by_user_id = :reviewer,
+                     reviewed_at = NOW(), decision_note = :decision_note
+                 WHERE request_id = :request_id AND request_status = \'pending\''
+            );
+            $decision->execute([
+                'status' => $status,
+                'reviewer' => $registrar['user_id'],
+                'decision_note' => $note !== '' ? $note : null,
+                'request_id' => $requestId,
+            ]);
+            if ($decision->rowCount() !== 1) {
+                send_json(409, ['error' => 'That document request is no longer pending or does not exist.']);
+            }
+            send_json(200, ['message' => "Registration documents were {$status}."]);
+        }
+        request_method('GET');
+    }
+
+    if ($action === 'student_registration_document_file') {
+        request_method('GET');
+        require_user('registrar');
+        $documentId = filter_var($_GET['document_id'] ?? null, FILTER_VALIDATE_INT);
+        if (!$documentId) {
+            send_json(422, ['error' => 'A valid registration document is required.']);
+        }
+        $document = $pdo->prepare(
+            'SELECT d.original_filename, d.storage_filename
+             FROM student_registration_documents d
+             JOIN student_document_registration_requests r ON r.request_id = d.request_id
+             WHERE d.document_id = :document_id'
+        );
+        $document->execute(['document_id' => $documentId]);
+        $file = $document->fetch();
+        if (!$file) {
+            send_json(404, ['error' => 'That registration document was not found.']);
+        }
+        $path = private_registration_storage_directory()
+            . DIRECTORY_SEPARATOR . 'registration-documents'
+            . DIRECTORY_SEPARATOR . $file['storage_filename'];
+        if (!is_file($path) || !is_readable($path)) {
+            send_json(404, ['error' => 'The stored registration document is unavailable.']);
+        }
+        header('Content-Type: application/pdf');
+        header('Content-Length: ' . (string)filesize($path));
+        header('Content-Disposition: attachment; filename="registration-document.pdf"; filename*=UTF-8\'\'' . rawurlencode($file['original_filename']));
+        header('Cache-Control: private, no-store');
+        readfile($path);
+        exit;
     }
 
     if ($action === 'student_courses') {
@@ -427,81 +716,54 @@ try {
         $user = require_user('student');
         $statement = $pdo->prepare(
             'SELECT e.enrollment_id, c.course_code, c.course_title, c.units,
-                    co.section_code, faculty.full_name AS instructor,
-                    GROUP_CONCAT(DISTINCT CONCAT(
-                      UPPER(LEFT(cm.day_of_week, 1)), LOWER(SUBSTRING(cm.day_of_week, 2)),
-                      \' \', TIME_FORMAT(cm.start_time, \'%h:%i %p\'), \'–\', TIME_FORMAT(cm.end_time, \'%h:%i %p\')
-                    ) ORDER BY cm.day_of_week SEPARATOR \' · \') AS schedule,
-                    GROUP_CONCAT(DISTINCT cm.room ORDER BY cm.day_of_week SEPARATOR \' · \') AS room,
-                    COALESCE(grade_summary.numeric_grade, fg.numeric_grade) AS numeric_grade,
-                    grade_summary.quiz_grade, grade_summary.project_grade, grade_summary.exam_grade,
-                    fg.letter_grade, fg.grade_points
+                    co.section_code, COALESCE(co.instructor_name, \'Unassigned\') AS instructor
              FROM enrollments e
              JOIN course_offerings co ON co.offering_id = e.offering_id
              JOIN courses c ON c.course_id = co.course_id
-             JOIN student_profiles sp ON sp.user_id = e.student_user_id
+             JOIN users sp ON sp.user_id = e.student_user_id
              JOIN programs p ON p.program_id = sp.program_id
              JOIN program_courses pc ON pc.program_id = sp.program_id
                AND pc.course_id = c.course_id AND pc.recommended_year = sp.year_level
              JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status = \'active\'
-             LEFT JOIN users faculty ON faculty.user_id = co.faculty_user_id
-             LEFT JOIN class_meetings cm ON cm.offering_id = co.offering_id
-             LEFT JOIN final_grades fg ON fg.enrollment_id = e.enrollment_id
-             LEFT JOIN (
-               SELECT score.enrollment_id,
-                      ROUND(AVG(score.score / assessment.max_score * 100), 2) AS numeric_grade,
-                      ROUND(MAX(CASE WHEN assessment.assessment_name = \'Quiz\'
-                        THEN score.score / assessment.max_score * 100 END), 2) AS quiz_grade,
-                      ROUND(MAX(CASE WHEN assessment.assessment_name = \'Project\'
-                        THEN score.score / assessment.max_score * 100 END), 2) AS project_grade,
-                      ROUND(MAX(CASE WHEN assessment.assessment_name = \'Exam\'
-                        THEN score.score / assessment.max_score * 100 END), 2) AS exam_grade
-               FROM assessment_scores score
-               JOIN assessments assessment ON assessment.assessment_id = score.assessment_id
-               WHERE score.score IS NOT NULL
-               GROUP BY score.enrollment_id
-             ) grade_summary ON grade_summary.enrollment_id = e.enrollment_id
              WHERE e.student_user_id = :student_user_id AND e.enrollment_status = \'approved\'
                AND co.section_code LIKE CONCAT(p.program_code, \'-\', sp.year_level, \'%\')
-             GROUP BY e.enrollment_id, c.course_code, c.course_title, c.units,
-                      co.section_code, faculty.full_name, fg.numeric_grade, grade_summary.numeric_grade,
-                      grade_summary.quiz_grade, grade_summary.project_grade, grade_summary.exam_grade,
-                      fg.letter_grade, fg.grade_points
              ORDER BY c.course_code'
         );
         $statement->execute(['student_user_id' => $user['user_id']]);
         send_json(200, ['courses' => $statement->fetchAll()]);
     }
 
-    if ($action === 'student_attendance') {
-        request_method('GET');
-        $user = require_user('student');
-        $statement = $pdo->prepare(
-            'SELECT sess.session_date,
-                    COALESCE(NULLIF(TIME_FORMAT(sess.start_time, \'%h:%i %p\'), \'12:00 AM\'),
-                      (SELECT TIME_FORMAT(cm.start_time, \'%h:%i %p\') FROM class_meetings cm
-                       WHERE cm.offering_id = co.offering_id ORDER BY cm.meeting_id LIMIT 1)) AS class_time,
-                    c.course_code, ar.attendance_status
-             FROM attendance_records ar
-             JOIN attendance_sessions sess ON sess.attendance_session_id = ar.attendance_session_id
-             JOIN enrollments e ON e.enrollment_id = ar.enrollment_id
-             JOIN course_offerings co ON co.offering_id = e.offering_id
-             JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status = \'active\'
-             JOIN courses c ON c.course_id = co.course_id
-             JOIN student_profiles sp ON sp.user_id = e.student_user_id
-             JOIN programs p ON p.program_id = sp.program_id
-             JOIN program_courses pc ON pc.program_id = sp.program_id
-               AND pc.course_id = c.course_id AND pc.recommended_year = sp.year_level
-             WHERE e.student_user_id = :student_user_id AND e.enrollment_status = \'approved\'
-               AND co.section_code LIKE CONCAT(p.program_code, \'-\', sp.year_level, \'%\')
-               AND ar.attendance_status <> \'unmarked\'
-             ORDER BY sess.session_date DESC, sess.start_time DESC'
-        );
-        $statement->execute(['student_user_id' => $user['user_id']]);
-        send_json(200, ['records' => $statement->fetchAll()]);
-    }
-
     if ($action === 'registrar_students') {
+        if ($method === 'PATCH') {
+            require_user('registrar');
+            $userId = filter_var(request_body()['user_id'] ?? null, FILTER_VALIDATE_INT);
+            if (!$userId) {
+                send_json(422, ['error' => 'Select a valid student record.']);
+            }
+
+            $pdo->beginTransaction();
+            $student = $pdo->prepare(
+                'SELECT student_status FROM users WHERE user_id = :user_id AND role = \'student\' FOR UPDATE'
+            );
+            $student->execute(['user_id' => $userId]);
+            $record = $student->fetch();
+            if (!$record) {
+                $pdo->rollBack();
+                send_json(404, ['error' => 'That student record was not found.']);
+            }
+            if ($record['student_status'] === 'withdrawn') {
+                $pdo->rollBack();
+                send_json(409, ['error' => 'That student has already been withdrawn.']);
+            }
+
+            $withdraw = $pdo->prepare(
+                'UPDATE users SET student_status = \'withdrawn\', account_status = \'suspended\'
+                 WHERE user_id = :user_id'
+            );
+            $withdraw->execute(['user_id' => $userId]);
+            $pdo->commit();
+            send_json(200, ['message' => 'Student withdrawn. Their account was suspended and academic records were retained.']);
+        }
         if ($method === 'POST') {
             require_user('registrar');
             $created = create_user_account($pdo, request_body(), 'student');
@@ -510,17 +772,18 @@ try {
         request_method('GET');
         require_user('registrar');
         $statement = $pdo->query(
-            'SELECT u.user_id, u.full_name, u.email, sp.student_number, sp.year_level,
-                    sp.student_status, p.program_name,
+            'SELECT u.user_id, u.full_name, u.email, u.student_number, u.year_level,
+                    u.student_status, p.program_name,
                     COALESCE(SUM(CASE WHEN e.enrollment_status = \'approved\' THEN c.units ELSE 0 END), 0) AS units
-             FROM student_profiles sp JOIN users u ON u.user_id = sp.user_id
-             JOIN programs p ON p.program_id = sp.program_id
-             LEFT JOIN enrollments e ON e.student_user_id = sp.user_id
+             FROM users u
+             JOIN programs p ON p.program_id = u.program_id
+             LEFT JOIN enrollments e ON e.student_user_id = u.user_id
              LEFT JOIN course_offerings co ON co.offering_id = e.offering_id
              LEFT JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status = \'active\'
              LEFT JOIN courses c ON c.course_id = co.course_id AND t.term_id IS NOT NULL
-             GROUP BY u.user_id, u.full_name, u.email, sp.student_number,
-                      sp.year_level, sp.student_status, p.program_name
+             WHERE u.role = \'student\'
+             GROUP BY u.user_id, u.full_name, u.email, u.student_number,
+                      u.year_level, u.student_status, p.program_name
              ORDER BY u.full_name'
         );
         $programs = $pdo->query('SELECT program_id, program_name FROM programs WHERE is_active = 1 ORDER BY program_name')->fetchAll();
@@ -532,9 +795,8 @@ try {
         if ($method === 'GET') {
             $statement = $pdo->query(
                 'SELECT u.user_id, u.full_name, u.email, u.role, u.account_status, u.created_at,
-                        COALESCE(sp.student_number, ep.employee_number, CONCAT(\'USR-\', LPAD(u.user_id, 5, \'0\'))) AS account_number
-                 FROM users u LEFT JOIN student_profiles sp ON sp.user_id = u.user_id
-                 LEFT JOIN employee_profiles ep ON ep.user_id = u.user_id
+                        COALESCE(u.student_number, u.employee_number, CONCAT(\'USR-\', LPAD(u.user_id, 5, \'0\'))) AS account_number
+                 FROM users u
                  ORDER BY u.created_at DESC, u.user_id DESC'
             );
             send_json(200, ['users' => $statement->fetchAll()]);
@@ -553,6 +815,16 @@ try {
             if ((int)$userId === (int)$admin['user_id'] && $status !== 'active') {
                 send_json(409, ['error' => 'You cannot suspend the account you are currently using.']);
             }
+            if ($status === 'active') {
+                $withdrawnStudent = $pdo->prepare(
+                    'SELECT 1 FROM users
+                     WHERE user_id = :user_id AND role = \'student\' AND student_status = \'withdrawn\''
+                );
+                $withdrawnStudent->execute(['user_id' => $userId]);
+                if ($withdrawnStudent->fetchColumn()) {
+                    send_json(409, ['error' => 'Withdrawn student accounts cannot be reactivated.']);
+                }
+            }
             $update = $pdo->prepare('UPDATE users SET account_status = :status WHERE user_id = :user_id');
             $update->execute(['status' => $status, 'user_id' => $userId]);
             if ($update->rowCount() !== 1) {
@@ -569,13 +841,12 @@ try {
             $statement = $pdo->query(
                 'SELECT c.course_id, c.course_code, c.course_title, c.units, c.course_status,
                         COALESCE(GROUP_CONCAT(DISTINCT p.program_name ORDER BY p.program_name SEPARATOR \', \'), d.department_name, \'General Education\') AS program,
-                        COALESCE(GROUP_CONCAT(DISTINCT faculty.full_name ORDER BY faculty.full_name SEPARATOR \', \'), \'Unassigned\') AS instructor
+                        COALESCE(GROUP_CONCAT(DISTINCT co.instructor_name ORDER BY co.instructor_name SEPARATOR \', \'), \'Unassigned\') AS instructor
                  FROM courses c
                  LEFT JOIN departments d ON d.department_id = c.department_id
                  LEFT JOIN program_courses pc ON pc.course_id = c.course_id
                  LEFT JOIN programs p ON p.program_id = pc.program_id
                  LEFT JOIN course_offerings co ON co.course_id = c.course_id
-                 LEFT JOIN users faculty ON faculty.user_id = co.faculty_user_id
                  GROUP BY c.course_id, c.course_code, c.course_title, c.units, c.course_status, d.department_name
                  ORDER BY c.course_code'
             );
@@ -702,9 +973,9 @@ try {
                     send_json(403, ['error' => 'This report requires a registrar or admin account.']);
                 }
                 $statement = $pdo->query(
-                    'SELECT sp.student_number, u.full_name, u.email, p.program_name, sp.year_level, sp.student_status
-                     FROM student_profiles sp JOIN users u ON u.user_id = sp.user_id
-                     JOIN programs p ON p.program_id = sp.program_id ORDER BY u.full_name'
+                    'SELECT u.student_number, u.full_name, u.email, p.program_name, u.year_level, u.student_status
+                     FROM users u JOIN programs p ON p.program_id = u.program_id
+                     WHERE u.role = \'student\' ORDER BY u.full_name'
                 );
                 $rows = $statement->fetchAll();
             } else {
@@ -712,10 +983,9 @@ try {
                     send_json(403, ['error' => 'This report requires a registrar or admin account.']);
                 }
                 $statement = $pdo->query(
-                    'SELECT e.request_code, u.full_name AS student, sp.student_number,
+                    'SELECT e.request_code, u.full_name AS student, u.student_number,
                             c.course_code, c.course_title, c.units, e.enrollment_status, e.requested_at
                      FROM enrollments e JOIN users u ON u.user_id = e.student_user_id
-                     JOIN student_profiles sp ON sp.user_id = u.user_id
                      JOIN course_offerings co ON co.offering_id = e.offering_id
                      JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status = \'active\'
                      JOIN courses c ON c.course_id = co.course_id ORDER BY e.requested_at DESC'
@@ -733,15 +1003,14 @@ try {
 
         $statement = $pdo->prepare(
             'SELECT co.offering_id, c.course_code, c.course_title, c.units,
-                    co.section_code, COALESCE(u.full_name, \'Unassigned\') AS instructor
+                    co.section_code, COALESCE(co.instructor_name, \'Unassigned\') AS instructor
              FROM course_offerings co
              JOIN courses c ON c.course_id = co.course_id
-             JOIN student_profiles sp ON sp.user_id = :student_user_id
+             JOIN users sp ON sp.user_id = :student_user_id
              JOIN programs p ON p.program_id = sp.program_id
              JOIN program_courses pc ON pc.program_id = sp.program_id
                AND pc.course_id = c.course_id AND pc.recommended_year = sp.year_level
              JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status = \'active\'
-             LEFT JOIN users u ON u.user_id = co.faculty_user_id
              WHERE co.offering_status = \'open\' AND c.course_status = \'active\'
                AND co.section_code LIKE CONCAT(p.program_code, \'-\', sp.year_level, \'%\')
                AND (
@@ -785,49 +1054,6 @@ try {
         send_json(200, ['courses' => $statement->fetchAll()]);
     }
 
-    if ($action === 'registrar_faculty') {
-        require_user('registrar');
-        if ($method !== 'GET') {
-            send_json(405, ['error' => 'Method not allowed.']);
-        }
-
-        $faculty = $pdo->query(
-            'SELECT u.user_id, ep.employee_number, u.full_name, u.email,
-                    d.department_code, d.department_name, ep.office,
-                    u.account_status
-             FROM users u
-             JOIN employee_profiles ep ON ep.user_id = u.user_id
-             LEFT JOIN departments d ON d.department_id = ep.department_id
-             WHERE u.role = \'faculty\'
-             ORDER BY u.account_status, u.full_name'
-        )->fetchAll();
-        $assignments = $pdo->query(
-            'SELECT co.faculty_user_id, co.offering_id, co.course_number,
-                    c.course_code, c.course_title, co.section_code,
-                    t.term_name, ay.year_label, p.program_code
-             FROM course_offerings co
-             JOIN courses c ON c.course_id = co.course_id
-             JOIN academic_terms t ON t.term_id = co.term_id
-             JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
-             LEFT JOIN programs p ON p.program_code = SUBSTRING_INDEX(co.section_code, \'-\', 1)
-             WHERE co.faculty_user_id IS NOT NULL
-               AND t.term_status IN (\'active\', \'upcoming\')
-               AND co.offering_status <> \'cancelled\'
-             ORDER BY ay.start_date DESC, t.start_date, c.course_code, co.section_code'
-        )->fetchAll();
-        $assignmentsByFaculty = [];
-        foreach ($assignments as $assignment) {
-            $assignmentsByFaculty[(int)$assignment['faculty_user_id']][] = $assignment;
-        }
-        foreach ($faculty as &$member) {
-            $member['assignments'] = $assignmentsByFaculty[(int)$member['user_id']] ?? [];
-            $member['assignment_count'] = count($member['assignments']);
-        }
-        unset($member);
-
-        send_json(200, ['faculty' => $faculty]);
-    }
-
     if ($action === 'registrar_sections') {
         $registrar = require_user('registrar');
 
@@ -843,13 +1069,6 @@ try {
                    AND t.term_name IN (\'1st semester\', \'2nd semester\')
                  ORDER BY ay.start_date DESC, t.start_date'
             )->fetchAll();
-            $faculty = $pdo->query(
-                'SELECT u.user_id, u.full_name FROM users u
-                 JOIN employee_profiles ep ON ep.user_id = u.user_id
-                 WHERE u.role = \'faculty\' AND u.account_status = \'active\'
-                 ORDER BY u.full_name'
-            )->fetchAll();
-
             $programId = trim((string)($_GET['program_id'] ?? ''));
             $termId = filter_var($_GET['term_id'] ?? null, FILTER_VALIDATE_INT);
             $roster = [];
@@ -870,7 +1089,7 @@ try {
                             pc.recommended_year, sections.section_letter,
                             CONCAT(p.program_code, \'-\', pc.recommended_year, \'-\', sections.section_letter) AS section_code,
                             co.offering_id, co.course_number, co.offering_status,
-                            co.faculty_user_id, faculty.full_name AS faculty_name,
+                            co.instructor_name,
                             (SELECT COUNT(*) FROM enrollments e
                              WHERE e.offering_id = co.offering_id AND e.enrollment_status = \'approved\') AS enrolled_count
                      FROM programs p
@@ -883,7 +1102,6 @@ try {
                      LEFT JOIN course_offerings co ON co.course_id = c.course_id
                        AND co.term_id = :term_for_offering
                        AND co.section_code = CONCAT(p.program_code, \'-\', pc.recommended_year, \'-\', sections.section_letter)
-                     LEFT JOIN users faculty ON faculty.user_id = co.faculty_user_id
                      WHERE p.program_id = :program_id
                      ORDER BY pc.recommended_year, c.course_code, sections.section_letter'
                 );
@@ -897,7 +1115,6 @@ try {
             send_json(200, [
                 'programs' => $programs,
                 'terms' => $terms,
-                'faculty' => $faculty,
                 'roster' => $roster,
                 'offerings' => $offerings,
             ]);
@@ -945,7 +1162,7 @@ try {
 
                 $profiles = $pdo->prepare(
                     'SELECT sp.user_id, r.section_code
-                     FROM student_profiles sp
+                     FROM users sp
                      JOIN users u ON u.user_id = sp.user_id AND u.account_status = \'active\'
                      LEFT JOIN campus_student_registry r ON r.student_number = sp.student_number
                      WHERE sp.program_id = :program_id AND sp.student_status = \'active\'
@@ -1013,7 +1230,7 @@ try {
                 $studentList = $pdo->prepare(
                     'SELECT sp.user_id, sp.student_number, p.program_code, sp.year_level,
                             COALESCE(section_assignment.section_code, roster.section_code, "A") AS section_letter
-                     FROM student_profiles sp
+                     FROM users sp
                      JOIN users u ON u.user_id = sp.user_id AND u.account_status = "active"
                      JOIN programs p ON p.program_id = sp.program_id AND p.is_active = 1
                      LEFT JOIN student_section_assignments section_assignment
@@ -1094,29 +1311,27 @@ try {
         if ($method === 'PATCH') {
             $body = request_body();
             $offeringId = filter_var($body['offering_id'] ?? null, FILTER_VALIDATE_INT);
-            $facultyId = ($body['faculty_user_id'] ?? '') === '' ? null : filter_var($body['faculty_user_id'], FILTER_VALIDATE_INT);
-            if (!$offeringId || (($body['faculty_user_id'] ?? '') !== '' && !$facultyId)) {
-                send_json(422, ['error' => 'Choose a valid course section and faculty member.']);
+            $instructorName = trim((string)($body['instructor_name'] ?? ''));
+            if (!$offeringId || mb_strlen($instructorName) > 160) {
+                send_json(422, ['error' => 'Choose a valid course section and instructor name of up to 160 characters.']);
             }
-            if ($facultyId) {
-                $facultyCheck = $pdo->prepare(
-                    'SELECT 1 FROM users u JOIN employee_profiles ep ON ep.user_id = u.user_id
-                     WHERE u.user_id = :faculty_user_id AND u.role = \'faculty\' AND u.account_status = \'active\''
-                );
-                $facultyCheck->execute(['faculty_user_id' => $facultyId]);
-                if (!$facultyCheck->fetchColumn()) {
-                    send_json(422, ['error' => 'Select an active faculty account.']);
-                }
-            }
-            $updateFaculty = $pdo->prepare(
-                'UPDATE course_offerings SET faculty_user_id = :faculty_user_id
+            $sectionExists = $pdo->prepare(
+                'SELECT 1 FROM course_offerings
                  WHERE offering_id = :offering_id AND course_number IS NOT NULL'
             );
-            $updateFaculty->execute(['faculty_user_id' => $facultyId, 'offering_id' => $offeringId]);
-            if ($updateFaculty->rowCount() !== 1) {
-                send_json(404, ['error' => 'Prepare the course sections before assigning faculty.']);
+            $sectionExists->execute(['offering_id' => $offeringId]);
+            if (!$sectionExists->fetchColumn()) {
+                send_json(404, ['error' => 'Prepare the course sections before adding an instructor reference.']);
             }
-            send_json(200, ['message' => 'Faculty assignment saved for this course number.']);
+            $updateInstructor = $pdo->prepare(
+                'UPDATE course_offerings SET instructor_name = :instructor_name
+                 WHERE offering_id = :offering_id AND course_number IS NOT NULL'
+            );
+            $updateInstructor->execute([
+                'instructor_name' => $instructorName !== '' ? $instructorName : null,
+                'offering_id' => $offeringId,
+            ]);
+            send_json(200, ['message' => 'Instructor reference saved for this course number.']);
         }
         request_method('GET');
     }
@@ -1128,7 +1343,7 @@ try {
             $students = $pdo->query(
                 'SELECT sp.user_id, sp.student_number, u.full_name AS student_name,
                         sp.program_id, p.program_code, p.program_name, sp.year_level
-                 FROM student_profiles sp
+                 FROM users sp
                  JOIN users u ON u.user_id = sp.user_id AND u.account_status = \'active\'
                  JOIN programs p ON p.program_id = sp.program_id AND p.is_active = 1
                  WHERE sp.student_status = \'active\'
@@ -1157,7 +1372,7 @@ try {
                                 AND co.term_id = t.term_id AND co.course_id = c.course_id
                                 AND e.enrollment_status IN (\'pending\', \'approved\')
                             ) AS already_enrolled
-                     FROM student_profiles sp
+                     FROM users sp
                      JOIN programs p ON p.program_id = sp.program_id
                      JOIN academic_terms t ON t.term_id = :term_id
                        AND t.term_status IN (\'active\', \'upcoming\')
@@ -1192,7 +1407,7 @@ try {
                 'SELECT sp.user_id, sp.student_number, p.program_code, sp.year_level,
                         COALESCE(section_assignment.section_code, roster.section_code, \'A\') AS section_letter,
                         t.term_id, t.term_name, t.term_status, ay.year_label
-                 FROM student_profiles sp
+                 FROM users sp
                  JOIN users u ON u.user_id = sp.user_id AND u.account_status = \'active\'
                  JOIN programs p ON p.program_id = sp.program_id AND p.is_active = 1
                  JOIN academic_terms t ON t.term_id = :term_id
@@ -1215,7 +1430,7 @@ try {
             $semesterNumber = $student['term_name'] === '1st semester' ? 1 : 2;
             $curriculumQuery = $pdo->prepare(
                 'SELECT c.course_id, c.course_code, c.units
-                 FROM student_profiles sp
+                 FROM users sp
                  JOIN program_courses pc ON pc.program_id = sp.program_id
                    AND pc.recommended_year = :year_level
                    AND pc.recommended_semester = :semester
@@ -1343,7 +1558,7 @@ try {
                  JOIN course_offerings co ON co.offering_id = e.offering_id
                  JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status = \'active\'
                  JOIN courses c ON c.course_id = co.course_id
-                 JOIN student_profiles sp ON sp.user_id = e.student_user_id
+                 JOIN users sp ON sp.user_id = e.student_user_id
                  JOIN programs p ON p.program_id = sp.program_id
                  JOIN program_courses pc ON pc.program_id = sp.program_id
                    AND pc.course_id = c.course_id AND pc.recommended_year = sp.year_level
@@ -1368,7 +1583,7 @@ try {
                 'SELECT co.offering_id, co.capacity, c.course_code
                  FROM course_offerings co
                  JOIN courses c ON c.course_id = co.course_id
-                 JOIN student_profiles sp ON sp.user_id = :student_user_id
+                 JOIN users sp ON sp.user_id = :student_user_id
                  JOIN programs p ON p.program_id = sp.program_id
                  JOIN program_courses pc ON pc.program_id = sp.program_id
                    AND pc.course_id = c.course_id AND pc.recommended_year = sp.year_level
@@ -1529,7 +1744,7 @@ try {
                         student.full_name AS student_name, p.program_name,
                         c.course_code, c.course_title, c.units
                  FROM enrollments e
-                 JOIN student_profiles s ON s.user_id = e.student_user_id
+                 JOIN users s ON s.user_id = e.student_user_id
                  JOIN users student ON student.user_id = s.user_id
                  JOIN programs p ON p.program_id = s.program_id
                  JOIN course_offerings co ON co.offering_id = e.offering_id
@@ -1576,291 +1791,15 @@ try {
         request_method('GET');
     }
 
-    if ($action === 'faculty_classes') {
-        request_method('GET');
-        $user = require_user('faculty');
-        $statement = $pdo->prepare(
-            'SELECT co.offering_id, co.course_number, c.course_code, c.course_title, co.section_code,
-                    t.term_name, ay.year_label,
-                    co.capacity, COUNT(DISTINCT e.enrollment_id) AS student_count,
-                    GROUP_CONCAT(
-                      DISTINCT CONCAT(
-                        UPPER(LEFT(cm.day_of_week, 1)), LOWER(SUBSTRING(cm.day_of_week, 2)),
-                        \' \', TIME_FORMAT(cm.start_time, \'%h:%i %p\'),
-                        \'–\', TIME_FORMAT(cm.end_time, \'%h:%i %p\'),
-                        COALESCE(CONCAT(\' · \', cm.room), \'\')
-                      ) ORDER BY cm.day_of_week SEPARATOR \', \'
-                    ) AS schedule
-             FROM course_offerings co
-             JOIN courses c ON c.course_id = co.course_id
-             JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status IN (\'active\', \'upcoming\')
-             JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
-             LEFT JOIN enrollments e ON e.offering_id = co.offering_id
-               AND e.enrollment_status = \'approved\'
-             LEFT JOIN class_meetings cm ON cm.offering_id = co.offering_id
-             WHERE co.faculty_user_id = :faculty_user_id
-               AND co.offering_status = \'open\' AND c.course_status = \'active\'
-               AND (:active_only = 0 OR t.term_status = \'active\')
-             GROUP BY co.offering_id, co.course_number, c.course_code, c.course_title, co.section_code,
-                      t.term_name, ay.year_label, co.capacity
-             ORDER BY ay.start_date DESC, t.start_date, c.course_code, co.section_code'
-        );
-        $statement->execute([
-            'faculty_user_id' => $user['user_id'],
-            'active_only' => ($_GET['active_only'] ?? '') === '1' ? 1 : 0,
-        ]);
-        send_json(200, ['classes' => $statement->fetchAll()]);
-    }
-
-    if ($action === 'faculty_grades') {
-        $user = require_user('faculty');
-        if ($method === 'GET') {
-            $offeringId = filter_var($_GET['offering_id'] ?? null, FILTER_VALIDATE_INT);
-            if (!$offeringId || $offeringId < 1) {
-                send_json(422, ['error' => 'Select a valid class.']);
-            }
-            $offering = active_faculty_offering($pdo, $offeringId, $user['user_id']);
-            $statement = $pdo->prepare(
-                'SELECT e.enrollment_id, s.student_number, student.full_name AS student_name,
-                        a.assessment_name, a.max_score, score.score
-                 FROM enrollments e
-                 JOIN student_profiles s ON s.user_id = e.student_user_id
-                 JOIN users student ON student.user_id = s.user_id
-                 LEFT JOIN assessments a ON a.offering_id = e.offering_id
-                 LEFT JOIN assessment_scores score
-                   ON score.assessment_id = a.assessment_id
-                  AND score.enrollment_id = e.enrollment_id
-                  AND score.offering_id = e.offering_id
-                 WHERE e.offering_id = :offering_id
-                   AND e.enrollment_status = \'approved\'
-                 ORDER BY student.full_name, a.assessment_id'
-            );
-            $statement->execute(['offering_id' => $offeringId]);
-            send_json(200, ['class' => $offering, 'grades' => $statement->fetchAll()]);
-        }
-
-        if ($method === 'PUT') {
-            $body = request_body();
-            $offeringId = filter_var($body['offering_id'] ?? null, FILTER_VALIDATE_INT);
-            $rows = $body['grades'] ?? null;
-            if (!$offeringId || $offeringId < 1 || !is_array($rows)) {
-                send_json(422, ['error' => 'Provide a valid class and grade entries.']);
-            }
-            active_faculty_offering($pdo, $offeringId, $user['user_id']);
-
-            $pdo->beginTransaction();
-            $ensureAssessment = $pdo->prepare(
-                'INSERT INTO assessments (offering_id, assessment_name, max_score, weight_percent)
-                 VALUES (:offering_id, :assessment_name, 100, 0)
-                 ON DUPLICATE KEY UPDATE assessment_id = assessment_id'
-            );
-            foreach (['Quiz', 'Project', 'Exam'] as $name) {
-                $ensureAssessment->execute([
-                    'offering_id' => $offeringId,
-                    'assessment_name' => $name,
-                ]);
-            }
-
-            $assessmentsQuery = $pdo->prepare(
-                'SELECT assessment_id, assessment_name, max_score
-                 FROM assessments WHERE offering_id = :offering_id'
-            );
-            $assessmentsQuery->execute(['offering_id' => $offeringId]);
-            $assessments = [];
-            foreach ($assessmentsQuery->fetchAll() as $assessment) {
-                $assessments[$assessment['assessment_name']] = $assessment;
-            }
-            $assessmentNames = ['Quiz', 'Project', 'Exam'];
-            foreach ($assessmentNames as $name) {
-                if (!isset($assessments[$name])) {
-                    $pdo->rollBack();
-                    send_json(409, ['error' => 'This class is missing a required grade category. Contact an administrator.']);
-                }
-            }
-
-            $enrollmentQuery = $pdo->prepare(
-                'SELECT enrollment_id FROM enrollments
-                 WHERE enrollment_status = \'approved\' AND offering_id = :offering_id
-                 FOR UPDATE'
-            );
-            $enrollmentQuery->execute(['offering_id' => $offeringId]);
-            $validEnrollmentIds = array_map('intval', $enrollmentQuery->fetchAll(PDO::FETCH_COLUMN));
-            $providedEnrollmentIds = [];
-            foreach ($rows as $row) {
-                if (!is_array($row)) {
-                    $pdo->rollBack();
-                    send_json(422, ['error' => 'Each grade entry must be an object.']);
-                }
-                $enrollmentId = filter_var($row['enrollment_id'] ?? null, FILTER_VALIDATE_INT);
-                if (!$enrollmentId || !in_array((int)$enrollmentId, $validEnrollmentIds, true)) {
-                    $pdo->rollBack();
-                    send_json(403, ['error' => 'A grade entry does not belong to an approved student in your class.']);
-                }
-                if (in_array((int)$enrollmentId, $providedEnrollmentIds, true)) {
-                    $pdo->rollBack();
-                    send_json(422, ['error' => 'Duplicate student grade entries are not allowed.']);
-                }
-                $providedEnrollmentIds[] = (int)$enrollmentId;
-                foreach ($assessmentNames as $name) {
-                    $score = $row[$name] ?? null;
-                    if ($score !== null && (!is_numeric($score) || (float)$score < 0 || (float)$score > (float)$assessments[$name]['max_score'])) {
-                        $pdo->rollBack();
-                        send_json(422, ['error' => $name . ' scores must be between 0 and ' . $assessments[$name]['max_score'] . '.']);
-                    }
-                }
-            }
-
-            sort($validEnrollmentIds);
-            sort($providedEnrollmentIds);
-            if ($validEnrollmentIds !== $providedEnrollmentIds) {
-                $pdo->rollBack();
-                send_json(422, ['error' => 'Submit a grade row for every approved student in this class.']);
-            }
-
-            $saveScore = $pdo->prepare(
-                'INSERT INTO assessment_scores
-                   (assessment_id, enrollment_id, offering_id, score, graded_by_user_id, graded_at)
-                 VALUES (:assessment_id, :enrollment_id, :offering_id, :score, :grader, NOW())
-                 ON DUPLICATE KEY UPDATE score = VALUES(score),
-                   graded_by_user_id = VALUES(graded_by_user_id), graded_at = VALUES(graded_at)'
-            );
-            foreach ($rows as $row) {
-                foreach ($assessmentNames as $name) {
-                    $saveScore->execute([
-                        'assessment_id' => $assessments[$name]['assessment_id'],
-                        'enrollment_id' => (int)$row['enrollment_id'],
-                        'offering_id' => $offeringId,
-                        'score' => ($row[$name] ?? null) === '' ? null : ($row[$name] ?? null),
-                        'grader' => $user['user_id'],
-                    ]);
-                }
-            }
-            $pdo->commit();
-            send_json(200, ['message' => 'Grades were saved.']);
-        }
-
-        request_method('GET');
-    }
-
-    if ($action === 'faculty_attendance') {
-        $user = require_user('faculty');
-        if ($method === 'GET' || $method === 'PUT') {
-            $body = $method === 'PUT' ? request_body() : [];
-            $offeringId = filter_var(
-                $method === 'PUT' ? ($body['offering_id'] ?? null) : ($_GET['offering_id'] ?? null),
-                FILTER_VALIDATE_INT
-            );
-            $sessionDate = (string)($method === 'PUT' ? ($body['session_date'] ?? '') : ($_GET['session_date'] ?? ''));
-            $date = DateTimeImmutable::createFromFormat('!Y-m-d', $sessionDate);
-            if (!$offeringId || $offeringId < 1 || !$date || $date->format('Y-m-d') !== $sessionDate) {
-                send_json(422, ['error' => 'Provide a valid class and session date.']);
-            }
-            $offering = active_faculty_offering($pdo, $offeringId, $user['user_id']);
-
-            if ($method === 'GET') {
-                $statement = $pdo->prepare(
-                    'SELECT e.enrollment_id, s.student_number, student.full_name AS student_name,
-                            COALESCE(ar.attendance_status, \'unmarked\') AS attendance_status
-                     FROM enrollments e
-                     JOIN student_profiles s ON s.user_id = e.student_user_id
-                     JOIN users student ON student.user_id = s.user_id
-                     LEFT JOIN attendance_sessions session
-                       ON session.offering_id = e.offering_id AND session.session_date = :session_date
-                     LEFT JOIN attendance_records ar
-                       ON ar.attendance_session_id = session.attendance_session_id
-                      AND ar.enrollment_id = e.enrollment_id
-                      AND ar.offering_id = e.offering_id
-                     WHERE e.offering_id = :offering_id
-                       AND e.enrollment_status = \'approved\'
-                     ORDER BY student.full_name'
-                );
-                $statement->execute([
-                    'session_date' => $sessionDate,
-                    'offering_id' => $offeringId,
-                ]);
-                send_json(200, ['class' => $offering, 'session_date' => $sessionDate, 'students' => $statement->fetchAll()]);
-            }
-
-            $rows = $body['students'] ?? null;
-            if (!is_array($rows)) {
-                send_json(422, ['error' => 'Provide attendance status for each student in the class.']);
-            }
-            $allowedStatuses = ['present', 'late', 'absent', 'unmarked'];
-            $pdo->beginTransaction();
-            $enrollmentQuery = $pdo->prepare(
-                'SELECT enrollment_id FROM enrollments
-                 WHERE enrollment_status = \'approved\' AND offering_id = :offering_id
-                 FOR UPDATE'
-            );
-            $enrollmentQuery->execute(['offering_id' => $offeringId]);
-            $validEnrollmentIds = array_map('intval', $enrollmentQuery->fetchAll(PDO::FETCH_COLUMN));
-            $providedEnrollmentIds = [];
-            foreach ($rows as $row) {
-                if (!is_array($row)) {
-                    $pdo->rollBack();
-                    send_json(422, ['error' => 'Each attendance entry must be an object.']);
-                }
-                $enrollmentId = filter_var($row['enrollment_id'] ?? null, FILTER_VALIDATE_INT);
-                $status = $row['status'] ?? null;
-                if (!$enrollmentId || !in_array((int)$enrollmentId, $validEnrollmentIds, true) || !in_array($status, $allowedStatuses, true)) {
-                    $pdo->rollBack();
-                    send_json(422, ['error' => 'Attendance entries must reference class students and use a valid status.']);
-                }
-                if (in_array((int)$enrollmentId, $providedEnrollmentIds, true)) {
-                    $pdo->rollBack();
-                    send_json(422, ['error' => 'Duplicate attendance entries are not allowed.']);
-                }
-                $providedEnrollmentIds[] = (int)$enrollmentId;
-            }
-            sort($validEnrollmentIds);
-            sort($providedEnrollmentIds);
-            if ($validEnrollmentIds !== $providedEnrollmentIds) {
-                $pdo->rollBack();
-                send_json(422, ['error' => 'Submit attendance for every approved student in this class.']);
-            }
-
-            $sessionQuery = $pdo->prepare(
-                'INSERT INTO attendance_sessions
-                   (offering_id, session_date, start_time, taken_by_user_id)
-                 VALUES (:offering_id, :session_date, \'00:00:00\', :faculty_user_id)
-                 ON DUPLICATE KEY UPDATE
-                   attendance_session_id = LAST_INSERT_ID(attendance_session_id),
-                   taken_by_user_id = VALUES(taken_by_user_id)'
-            );
-            $sessionQuery->execute([
-                'offering_id' => $offeringId,
-                'session_date' => $sessionDate,
-                'faculty_user_id' => $user['user_id'],
-            ]);
-            $sessionId = (int)$pdo->lastInsertId();
-            $saveRecord = $pdo->prepare(
-                'INSERT INTO attendance_records
-                   (attendance_session_id, enrollment_id, offering_id, attendance_status, marked_at)
-                 VALUES (:session_id, :enrollment_id, :offering_id, :status,
-                     IF(:status_for_date = \'unmarked\', NULL, NOW()))
-                 ON DUPLICATE KEY UPDATE attendance_status = VALUES(attendance_status),
-                   marked_at = VALUES(marked_at)'
-            );
-            foreach ($rows as $row) {
-                $saveRecord->execute([
-                    'session_id' => $sessionId,
-                    'enrollment_id' => (int)$row['enrollment_id'],
-                    'offering_id' => $offeringId,
-                    'status' => $row['status'],
-                    'status_for_date' => $row['status'],
-                ]);
-            }
-            $pdo->commit();
-            send_json(200, ['message' => 'Attendance was saved.']);
-        }
-
-        request_method('GET');
-    }
-
     send_json(404, ['error' => 'Unknown API action.']);
 } catch (Throwable $error) {
     if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
         $pdo->rollBack();
+    }
+    foreach ($storedUploads as $path) {
+        if (is_file($path)) {
+            unlink($path);
+        }
     }
     handle_api_error($error);
 }

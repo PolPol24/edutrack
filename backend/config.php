@@ -42,7 +42,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
 }
 
 if (PHP_SAPI !== 'cli' && session_status() !== PHP_SESSION_ACTIVE) {
+    $sessionLifetime = 60 * 60 * 24 * 30;
+    ini_set('session.gc_maxlifetime', (string)$sessionLifetime);
     session_set_cookie_params([
+        'lifetime' => $sessionLifetime,
         'httponly' => true,
         'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
         'samesite' => 'Lax',

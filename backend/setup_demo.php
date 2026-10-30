@@ -15,11 +15,6 @@ try {
     // This local demo reset intentionally removes old sample activity and rebuilds
     // only the explicitly requested accounts, catalog, sections, and enrollments.
     foreach ([
-        'DELETE FROM attendance_records',
-        'DELETE FROM attendance_sessions',
-        'DELETE FROM assessment_scores',
-        'DELETE FROM final_grades',
-        'DELETE FROM assessments',
         'DELETE FROM class_meetings',
         'DELETE FROM enrollments',
         'DELETE FROM student_section_assignments',
@@ -31,57 +26,34 @@ try {
     }
 
     $accounts = [
-        ['Alyssa Cruz', 'student@edutrack.edu', 'student', 'BSIT', 1, 'BSIT-1A', '2026'],
-        ['Zedrick Tolentino', 'rance@edutrack.edu', 'student', 'BSCS', 3, 'BSCS-3D', '2026'],
-        ['Pol Samsung', 'pol.samsung@edutrack.edu', 'student', 'BSCS', 2, 'BSCS-2C', '2026'],
-        ['Maria Elena Santos', 'faculty@edutrack.edu', 'faculty', null, null, null, null],
-        ['Lord Toletole', 'lord.toletole@edutrack.edu', 'faculty', null, null, null, null],
-        ['Amara Dela Cruz', 'amara.delacruz@edutrack.edu', 'faculty', null, null, null, null],
-        ['Joaquin Padilla', 'joaquin.padilla@edutrack.edu', 'faculty', null, null, null, null],
-        ['Bianca Manalo', 'bianca.manalo@edutrack.edu', 'faculty', null, null, null, null],
-        ['Luis Romero', 'luis.romero@edutrack.edu', 'faculty', null, null, null, null],
-        ['Patricia Alonzo', 'patricia.alonzo@edutrack.edu', 'faculty', null, null, null, null],
-        ['Vincent Chua', 'vincent.chua@edutrack.edu', 'faculty', null, null, null, null],
-        ['Ramon Villanueva', 'registrar@edutrack.edu', 'registrar', null, null, null, null],
-        ['EduTrack Administrator', 'admin@edutrack.edu', 'admin', null, null, null, null],
-    ];
-    $facultyDepartments = [
-        'faculty@edutrack.edu' => 'IS',
-        'lord.toletole@edutrack.edu' => 'CS',
-        'amara.delacruz@edutrack.edu' => 'IT',
-        'joaquin.padilla@edutrack.edu' => 'IS',
-        'bianca.manalo@edutrack.edu' => 'CS',
-        'luis.romero@edutrack.edu' => 'IT',
-        'patricia.alonzo@edutrack.edu' => 'IS',
-        'vincent.chua@edutrack.edu' => 'CS',
+        ['Alyssa Cruz', 'student@edutrack.edu', 'student', 'BSIT', 1],
+        ['Zedrick Tolentino', 'rance@edutrack.edu', 'student', 'BSCS', 3],
+        ['Pol Samsung', 'pol.samsung@edutrack.edu', 'student', 'BSCS', 2],
+        ['Ramon Villanueva', 'registrar@edutrack.edu', 'registrar', null, null],
+        ['EduTrack Administrator', 'admin@edutrack.edu', 'admin', null, null],
     ];
     $allowedEmails = array_column($accounts, 1);
     $placeholders = implode(',', array_fill(0, count($allowedEmails), '?'));
-    $removeOtherStudentProfiles = $pdo->prepare("DELETE sp FROM student_profiles sp JOIN users u ON u.user_id = sp.user_id WHERE u.email NOT IN ($placeholders)");
-    $removeOtherStudentProfiles->execute($allowedEmails);
-    $removeOtherEmployeeProfiles = $pdo->prepare("DELETE ep FROM employee_profiles ep JOIN users u ON u.user_id = ep.user_id WHERE u.email NOT IN ($placeholders)");
-    $removeOtherEmployeeProfiles->execute($allowedEmails);
     $removeOthers = $pdo->prepare("DELETE FROM users WHERE email NOT IN ($placeholders)");
     $removeOthers->execute($allowedEmails);
 
     $upsertUser = $pdo->prepare(
-        'INSERT INTO users (full_name, email, password_hash, role, account_status)
-         VALUES (:full_name, :email, :password_hash, :role, \'active\')
-         ON DUPLICATE KEY UPDATE full_name = VALUES(full_name), password_hash = VALUES(password_hash),
+        'INSERT INTO users (full_name, first_name, last_name, email, password_hash, role, account_status)
+         VALUES (:full_name, :first_name, :last_name, :email, :password_hash, :role, \'active\')
+         ON DUPLICATE KEY UPDATE full_name = VALUES(full_name), first_name = VALUES(first_name),
+           last_name = VALUES(last_name), password_hash = VALUES(password_hash),
            role = VALUES(role), account_status = \'active\''
     );
     $getUser = $pdo->prepare('SELECT user_id, created_at FROM users WHERE email = :email');
     $getProgram = $pdo->prepare('SELECT program_id FROM programs WHERE program_code = :program_code');
     $upsertStudent = $pdo->prepare(
-        'INSERT INTO student_profiles (user_id, student_number, program_id, year_level)
-         VALUES (:user_id, :student_number, :program_id, :year_level)
-         ON DUPLICATE KEY UPDATE student_number = VALUES(student_number),
-           program_id = VALUES(program_id), year_level = VALUES(year_level), student_status = \'active\''
+        'UPDATE users SET student_number = :student_number, program_id = :program_id,
+             year_level = :year_level, student_status = \'active\'
+         WHERE user_id = :user_id'
     );
     $upsertEmployee = $pdo->prepare(
-        'INSERT INTO employee_profiles (user_id, employee_number, department_id)
-         VALUES (:user_id, :employee_number, :department_id)
-         ON DUPLICATE KEY UPDATE employee_number = VALUES(employee_number), department_id = VALUES(department_id)'
+        'UPDATE users SET employee_number = :employee_number, department_id = :department_id
+         WHERE user_id = :user_id'
     );
     $findDepartment = $pdo->prepare('SELECT department_id FROM departments WHERE department_code = :code');
     $passwordHash = password_hash('password', PASSWORD_DEFAULT);
@@ -89,8 +61,11 @@ try {
     $usedNumbers = [];
 
     foreach ($accounts as [$name, $email, $role, $programCode, $yearLevel]) {
+        [$firstName, $lastName] = array_pad(explode(' ', $name, 2), 2, '');
         $upsertUser->execute([
             'full_name' => $name,
+            'first_name' => $firstName,
+            'last_name' => $lastName,
             'email' => $email,
             'password_hash' => $passwordHash,
             'role' => $role,
@@ -118,7 +93,7 @@ try {
                 'year_level' => $yearLevel,
             ]);
         } else {
-            $departmentCode = $role === 'faculty' ? ($facultyDepartments[$email] ?? 'CS') : null;
+            $departmentCode = null;
             $departmentId = null;
             if ($departmentCode !== null) {
                 $findDepartment->execute(['code' => $departmentCode]);
@@ -175,36 +150,36 @@ try {
         throw new RuntimeException('No active academic term is configured.');
     }
     $demoSections = ['BSIT-1A', 'BSCS-2C', 'BSCS-3D'];
-    $facultyAssignments = [
+    $instructorAssignments = [
         'BSIT-1A' => [
-            'faculty@edutrack.edu' => ['DCIT 26', 'COSC 80'],
-            'lord.toletole@edutrack.edu' => ['COSC 85', 'DCIT 65'],
-            'patricia.alonzo@edutrack.edu' => ['MATH 3'],
+            'Maria Elena Santos' => ['DCIT 26', 'COSC 80'],
+            'Lord Toletole' => ['COSC 85', 'DCIT 65'],
+            'Patricia Alonzo' => ['MATH 3'],
         ],
         'BSCS-2C' => [
-            'faculty@edutrack.edu' => ['COSC 80', 'DCIT 26'],
-            'amara.delacruz@edutrack.edu' => ['COSC 85', 'DCIT 65'],
-            'joaquin.padilla@edutrack.edu' => ['MATH 3'],
-            'vincent.chua@edutrack.edu' => ['COSC 101'],
+            'Maria Elena Santos' => ['COSC 80', 'DCIT 26'],
+            'Amara Dela Cruz' => ['COSC 85', 'DCIT 65'],
+            'Joaquin Padilla' => ['MATH 3'],
+            'Vincent Chua' => ['COSC 101'],
         ],
         'BSCS-3D' => [
-            'faculty@edutrack.edu' => ['COSC 75', 'COSC 101'],
-            'bianca.manalo@edutrack.edu' => ['MATH 3', 'COSC 80'],
-            'luis.romero@edutrack.edu' => ['DCIT 26'],
+            'Maria Elena Santos' => ['COSC 75', 'COSC 101'],
+            'Bianca Manalo' => ['MATH 3', 'COSC 80'],
+            'Luis Romero' => ['DCIT 26'],
         ],
     ];
     $insertOffering = $pdo->prepare(
-        'INSERT INTO course_offerings (course_id, term_id, section_code, faculty_user_id, capacity)
-         SELECT course_id, :term_id, :section, :faculty_id, 40 FROM courses WHERE course_code = :course_code'
+        'INSERT INTO course_offerings (course_id, term_id, section_code, instructor_name, capacity)
+         SELECT course_id, :term_id, :section, NULL, 40 FROM courses WHERE course_code = :course_code'
     );
     $getOffering = $pdo->prepare(
         'SELECT co.offering_id FROM course_offerings co JOIN courses c ON c.course_id = co.course_id
          WHERE co.term_id = :term_id AND co.section_code = :section AND c.course_code = :course_code'
     );
-    $assignFaculty = $pdo->prepare(
+    $assignInstructorReference = $pdo->prepare(
         'UPDATE course_offerings co
          JOIN courses c ON c.course_id = co.course_id
-         SET co.faculty_user_id = :faculty_id
+         SET co.instructor_name = :instructor_name
          WHERE co.term_id = :term_id
            AND co.section_code = :section
            AND c.course_code = :course_code'
@@ -213,36 +188,22 @@ try {
         'INSERT INTO enrollments (request_code, student_user_id, offering_id, enrollment_status)
          VALUES (:request_code, :student, :offering, \'approved\')'
     );
-    $insertAssessment = $pdo->prepare(
-        'INSERT INTO assessments (offering_id, assessment_name, max_score, weight_percent)
-         VALUES (:offering, :name, 100, 0)'
-    );
     $requestCodes = [];
     foreach ($demoSections as $section) {
         foreach ($courses as [$code]) {
             $insertOffering->execute([
                 'term_id' => $activeTerm,
                 'section' => $section,
-                'faculty_id' => null,
                 'course_code' => $code,
             ]);
-            $getOffering->execute(['term_id' => $activeTerm, 'section' => $section, 'course_code' => $code]);
-            $offeringId = (int)$getOffering->fetchColumn();
-            foreach (['Quiz', 'Project', 'Exam'] as $assessment) {
-                $insertAssessment->execute(['offering' => $offeringId, 'name' => $assessment]);
-            }
         }
     }
 
-    foreach ($facultyAssignments as $section => $teachers) {
-        foreach ($teachers as $email => $courseCodes) {
-            $facultyId = $accountIds[$email] ?? null;
-            if (!$facultyId) {
-                continue;
-            }
+    foreach ($instructorAssignments as $section => $teachers) {
+        foreach ($teachers as $instructorName => $courseCodes) {
             foreach ($courseCodes as $courseCode) {
-                $assignFaculty->execute([
-                    'faculty_id' => $facultyId,
+                $assignInstructorReference->execute([
+                    'instructor_name' => $instructorName,
                     'term_id' => $activeTerm,
                     'section' => $section,
                     'course_code' => $courseCode,
@@ -251,7 +212,7 @@ try {
         }
     }
 
-    $getStudent = $pdo->prepare('SELECT user_id, student_number FROM student_profiles WHERE user_id = :id');
+    $getStudent = $pdo->prepare('SELECT user_id, student_number FROM users WHERE user_id = :id AND role = \'student\'');
     foreach ([
         'student@edutrack.edu' => 'BSIT-1A',
         'rance@edutrack.edu' => 'BSCS-3D',
@@ -279,8 +240,8 @@ try {
     }
 
     $pdo->commit();
-    fwrite(STDOUT, "EduTrack demo reset complete: 3 students, 8 faculty, one registrar, one admin; 7 courses in 3 sections.\n");
-    fwrite(STDOUT, "All demo passwords are: password\n");
+    fwrite(STDOUT, "EduTrack demo reset complete: 3 students, instructor references, one registrar, one admin; 7 courses in 3 sections.\n");
+    fwrite(STDOUT, "Student, registrar, and admin demo passwords are: password\n");
 } catch (Throwable $error) {
     if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
         $pdo->rollBack();
