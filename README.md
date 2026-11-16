@@ -201,6 +201,65 @@ second semester totals 23 units.
 Other dashboard pages still contain frontend sample data and need their own API
 integration before they read or write MySQL.
 
+## SOLID structure and Adapter pattern
+
+The API boundary and student attendance flow use smaller units with one clear
+responsibility:
+
+- **SRP:** `lib/http-transport.ts` owns network transport; `lib/api-client.ts`
+  owns HTTP request, response, and error handling; `lib/student-attendance-service.ts`
+  owns the student attendance and face enrollment operations. The attendance
+  page owns presentation and user interaction.
+- **OCP:** `ApiClient` depends on the `HttpTransport` interface. The current
+  browser implementation is `browserFetchTransport`; another transport or API
+  service can be introduced by implementing that interface without rewriting
+  feature pages. New attendance operations are added to the attendance service.
+- **DIP:** the API client receives its transport as a dependency instead of
+  calling `fetch` directly. `lib/api.ts` provides the configured production
+  instance and retains the action-based helper exports used by existing pages.
+- **Adapter:** `apiClient` translates the app's `apiRequest(action, options,
+  query)` contract into HTTP requests to the PHP endpoint, including URL
+  parameters, credentials, JSON headers, and API errors.
+
+```mermaid
+classDiagram
+  class StudentPage {
+    +render attendance
+    +handle user actions
+  }
+  class StudentAttendanceService {
+    +getStudentAttendance()
+    +saveStudentFace()
+    +revokeStudentFace()
+  }
+  class ApiHelpers {
+    +apiRequest(action, options, query)
+    +apiUrl(action, query)
+  }
+  class ApiClient {
+    +url(action, query)
+    +request(action, options, query)
+    +download(action, query)
+  }
+  class HttpTransport {
+    <<interface>>
+    +send(input, init)
+  }
+  class BrowserFetchTransport {
+    +send(input, init)
+  }
+  class PhpApi {
+    +handle action requests
+  }
+
+  StudentPage --> StudentAttendanceService
+  StudentAttendanceService --> ApiHelpers
+  ApiHelpers --> ApiClient : adapter
+  ApiClient --> HttpTransport : depends on
+  BrowserFetchTransport ..|> HttpTransport
+  HttpTransport --> PhpApi : HTTP
+```
+
 ## XAMPP troubleshooting
 
 - Confirm Apache and MySQL show **Running** in the XAMPP Control Panel.

@@ -4,13 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { CircleCheck, History, ShieldCheck } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import FaceEnrollmentCapture, { FaceCapture } from "@/components/FaceEnrollmentCapture";
-import { apiRequest } from "@/lib/api";
-
-type RecordItem = { attendance_status: string; checked_in_at: string | null; session_date: string; course_code: string; course_title: string; section_code: string; room: string; start_time: string; end_time: string };
-type FaceEnrollment = { template_status: string; model_version: string; consent_at: string; created_at: string } | null;
+import { getStudentAttendance, revokeStudentFace, saveStudentFace, type AttendanceRecord, type FaceEnrollment } from "@/lib/student-attendance-service";
 
 export default function StudentAttendancePage() {
-  const [records, setRecords] = useState<RecordItem[]>([]);
+  const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [enrollment, setEnrollment] = useState<FaceEnrollment>(null);
   const [consent, setConsent] = useState(false);
   const [message, setMessage] = useState(""); const [error, setError] = useState("");
@@ -18,25 +15,22 @@ export default function StudentAttendancePage() {
   const [busy, setBusy] = useState(false); const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    const [history, face] = await Promise.all([
-      apiRequest<{ records: RecordItem[] }>("student_attendance"),
-      apiRequest<{ enrollment: FaceEnrollment }>("student_face"),
-    ]);
-    setRecords(history.records); setEnrollment(face.enrollment);
+    const attendance = await getStudentAttendance();
+    setRecords(attendance.records); setEnrollment(attendance.enrollment);
   }, []);
   useEffect(() => { void load().catch((cause) => setError(cause instanceof Error ? cause.message : "Unable to load attendance." )).finally(() => setLoading(false)); }, [load]);
 
   async function saveFace() {
     if (!capture || !consent) { setError("Capture your face and confirm the notice first."); return; }
     setBusy(true); setError(""); setMessage("");
-    try { const result = await apiRequest<{ message: string }>("student_face", { method: "POST", body: JSON.stringify({ ...capture, face_consent: consent }) }); setMessage(result.message); setCapture(null); await load(); }
+    try { const result = await saveStudentFace(capture, consent); setMessage(result.message); setCapture(null); await load(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to enroll your face."); }
     finally { setBusy(false); }
   }
 
   async function revokeFace() {
     setBusy(true); setError("");
-    try { const result = await apiRequest<{ message: string }>("student_face", { method: "DELETE" }); setMessage(result.message); await load(); }
+    try { const result = await revokeStudentFace(); setMessage(result.message); await load(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to revoke face enrollment."); }
     finally { setBusy(false); }
   }

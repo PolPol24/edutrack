@@ -1,89 +1,12 @@
-const API_URL =
-  process.env.NEXT_PUBLIC_EDUTRACK_API_URL ??
-  "http://localhost/edutrack-api/api.php";
+import { ApiClient, ApiError } from "./api-client";
+import { browserFetchTransport } from "./http-transport";
 
-type ApiOptions = Omit<RequestInit, "credentials">;
+const API_URL = process.env.NEXT_PUBLIC_EDUTRACK_API_URL ?? "http://localhost/edutrack-api/api.php";
 
-export function apiUrl(
-  action: string,
-  query: Record<string, string | number> = {},
-): string {
-  const url = new URL(API_URL);
-  url.searchParams.set("action", action);
-  for (const [key, value] of Object.entries(query)) {
-    url.searchParams.set(key, String(value));
-  }
-  return url.toString();
-}
-
-export class ApiError extends Error {
-  constructor(message: string, public readonly status: number) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
-
-export async function apiRequest<T>(
-  action: string,
-  options: ApiOptions = {},
-  query: Record<string, string | number> = {},
-): Promise<T> {
-  const response = await fetch(apiUrl(action, query), {
-    ...options,
-    credentials: "include",
-    headers: {
-      ...(options.body && !(typeof FormData !== "undefined" && options.body instanceof FormData)
-        ? { "Content-Type": "application/json" }
-        : {}),
-      ...options.headers,
-    },
-  });
-
-  const responseBody = await response.text();
-  let payload: unknown = null;
-  try {
-    payload = JSON.parse(responseBody);
-  } catch {
-    if (response.ok) {
-      const message = responseBody.trim()
-        ? "EduTrack API returned an invalid response."
-        : "EduTrack API returned an empty response.";
-      throw new ApiError(message, response.status);
-    }
-  }
-  if (!response.ok) {
-    const message =
-      typeof payload === "object" &&
-      payload !== null &&
-      "error" in payload &&
-      typeof payload.error === "string"
-        ? payload.error
-        : `EduTrack API request failed (${response.status}).`;
-    throw new ApiError(message, response.status);
-  }
-
-  if (payload === null) {
-    throw new ApiError("EduTrack API returned an empty response.", response.status);
-  }
-
-  return payload as T;
-}
-
-export async function apiDownload(
-  action: string,
-  query: Record<string, string | number> = {},
-): Promise<Blob> {
-  const response = await fetch(apiUrl(action, query), { credentials: "include" });
-  if (!response.ok) {
-    const payload: unknown = await response.json().catch(() => null);
-    const message =
-      typeof payload === "object" &&
-      payload !== null &&
-      "error" in payload &&
-      typeof payload.error === "string"
-        ? payload.error
-        : `EduTrack API request failed (${response.status}).`;
-    throw new ApiError(message, response.status);
-  }
-  return response.blob();
-}
+/** Adapter from the app's action/query API to the PHP HTTP endpoint. */
+export const apiClient = new ApiClient(API_URL, browserFetchTransport);
+export { ApiError };
+export const apiUrl = (action: string, query: Record<string, string | number> = {}) => apiClient.url(action, query);
+export const apiRequest = <T>(action: string, options: Omit<RequestInit, "credentials"> = {}, query: Record<string, string | number> = {}) =>
+  apiClient.request<T>(action, options, query);
+export const apiDownload = (action: string, query: Record<string, string | number> = {}) => apiClient.download(action, query);
