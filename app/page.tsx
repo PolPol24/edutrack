@@ -23,9 +23,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     let active = true;
-    apiRequest<{ user: { role: Role } }>("me")
+    apiRequest<{ user: { role: Role; must_change_password?: boolean } }>("me")
       .then(({ user }) => {
-        if (active) router.replace(roleRoutes[user.role]);
+        if (active) router.replace(user.must_change_password ? "/change-password" : roleRoutes[user.role]);
       })
       .catch((cause: unknown) => {
         if (!active) return;
@@ -43,11 +43,11 @@ export default function LoginPage() {
     event.preventDefault();
     setError("");
     try {
-      const response = await apiRequest<{ user: { role: Role } }>("login", {
+      const response = await apiRequest<{ user: { role: Role; must_change_password?: boolean } }>("login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
       });
-      router.push(roleRoutes[response.user.role]);
+      router.push(response.user.must_change_password ? "/change-password" : roleRoutes[response.user.role]);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to sign in.");
     }
@@ -109,7 +109,7 @@ export default function LoginPage() {
             <button type="submit" className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-600/20">
               Sign in <ArrowRight size={17} />
             </button>
-          <p className="pt-1 text-center text-sm text-slate-500">Are you a student?{" "}<Link href="/register" className="font-semibold text-blue-600 hover:text-blue-800">Register here</Link></p>
+          <p className="pt-1 text-center text-sm text-slate-500">Are you an incoming freshman?{" "}<Link href="/register" className="font-semibold text-blue-600 hover:text-blue-800">Send your application here.</Link></p>
           </form>
 
         </div>

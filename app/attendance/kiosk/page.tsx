@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Camera, Clock3, KeyRound, Wifi } from "lucide-react";
 import FaceEnrollmentCapture, { FaceCapture } from "@/components/FaceEnrollmentCapture";
 import { apiRequest } from "@/lib/api";
@@ -21,10 +20,29 @@ export default function AttendanceKioskPage() {
   const [kioskId, setKioskId] = useState(""); const [secret, setSecret] = useState("");
   const [state, setState] = useState<KioskState | null>(null); const [error, setError] = useState("");
   const [result, setResult] = useState(""); const [captureKey, setCaptureKey] = useState(0);
-  const [exitOpen, setExitOpen] = useState(false); const [exitPassword, setExitPassword] = useState(""); const [exitError, setExitError] = useState(""); const [exitBusy, setExitBusy] = useState(false);
-  const router = useRouter();
 
-  useEffect(() => { const saved = window.localStorage.getItem(pairingKey); if (saved) { try { setPairing(JSON.parse(saved)); } catch { window.localStorage.removeItem(pairingKey); } } }, []);
+  useEffect(() => {
+    const requestedId = new URLSearchParams(window.location.search).get("kiosk_id");
+    const requestedNumber = Number(requestedId);
+    const hasRequestedId = requestedId !== null && Number.isSafeInteger(requestedNumber) && requestedNumber > 0;
+    if (hasRequestedId) setKioskId(String(requestedNumber));
+    const saved = window.localStorage.getItem(pairingKey);
+    if (!saved) {
+      if (hasRequestedId) setError("Enter the pairing secret for this room's kiosk to connect this device.");
+      return;
+    }
+    try {
+      const stored = JSON.parse(saved) as Pairing;
+      if (hasRequestedId && stored.kiosk_id !== requestedNumber) {
+        setError("This device is paired to a different kiosk. Enter the selected kiosk's pairing secret to switch rooms.");
+        return;
+      }
+      setPairing(stored);
+    } catch {
+      window.localStorage.removeItem(pairingKey);
+      if (hasRequestedId) setError("Enter the pairing secret for this room's kiosk to connect this device.");
+    }
+  }, []);
   const poll = useCallback(async (credentials: Pairing) => {
     const latest = await apiRequest<KioskState>("kiosk_state", { method: "POST", body: JSON.stringify(credentials) });
     setState(latest); setError("");
@@ -50,17 +68,8 @@ export default function AttendanceKioskPage() {
     } catch(cause) { setResult(cause instanceof Error?cause.message:"Attendance check-in failed.");setCaptureKey((value)=>value+1); }
   }
 
-  async function returnToDashboard(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setExitBusy(true); setExitError("");
-    try {
-      await apiRequest<{ verified: boolean }>("verify_dashboard_password", { method: "POST", body: JSON.stringify({ password: exitPassword }) });
-      router.push("/admin/dashboard");
-    } catch (cause) { setExitError(cause instanceof Error ? cause.message : "Password verification failed."); }
-    finally { setExitBusy(false); }
-  }
-
   if (!pairing) return <main className="flex min-h-screen items-center justify-center bg-slate-950 p-5 text-white"><form onSubmit={savePairing} className="w-full max-w-md rounded-3xl bg-white p-8 text-slate-900 shadow-2xl">
-    <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-100 text-blue-700"><KeyRound/></div><p className="text-sm font-semibold uppercase tracking-wider text-blue-700">EduTrack attendance</p><h1 className="mt-2 text-2xl font-bold">Pair this classroom kiosk</h1><p className="mt-2 text-sm leading-6 text-slate-600">Enter the kiosk number and one-time secret provided by an administrator. Keep this device on in the classroom.</p>
+    <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-100 text-blue-700"><KeyRound/></div><p className="text-sm font-semibold uppercase tracking-wider text-blue-700">EduTrack attendance</p><h1 className="mt-2 text-2xl font-bold">Pair this classroom kiosk</h1><p className="mt-2 text-sm leading-6 text-slate-600">Enter the kiosk number and one-time secret provided by an administrator. Keep this device on in the classroom. Each tablet stays paired to one room.</p>
     <label className="mt-6 block text-sm font-medium">Kiosk number<input required type="number" min="1" value={kioskId} onChange={(event)=>setKioskId(event.target.value)} className="mt-1.5 w-full rounded-xl border px-3 py-2.5"/></label>
     <label className="mt-4 block text-sm font-medium">Pairing secret<input required minLength={64} maxLength={64} value={secret} onChange={(event)=>setSecret(event.target.value)} className="mt-1.5 w-full rounded-xl border px-3 py-2.5 font-mono"/></label>
     {error&&<p role="alert" className="mt-4 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}<button className="mt-5 w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white">Connect kiosk</button>
@@ -77,7 +86,5 @@ export default function AttendanceKioskPage() {
         {state?.session?.status==="active"?<div className="w-full max-w-md"><div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><Camera size={28}/></div><h2 className="text-xl font-bold">Check in with your face</h2><p className="mt-2 text-sm leading-5 text-slate-500">Stand in front of the camera, center one face, and blink when prompted. Five images are sent to the local CompreFace service for matching.</p><div className="mt-5"><FaceEnrollmentCapture key={captureKey} onCapture={(face)=>{if(face)void submitFace(face);}} buttonLabel="Start face check-in"/></div>{result&&<p role="status" className={`mt-4 rounded-xl p-3 text-sm ${result.includes("marked")?"bg-emerald-50 text-emerald-800":"bg-amber-50 text-amber-800"}`}>{result}</p>}</div>:<><div className="flex h-72 w-full max-w-md items-center justify-center rounded-2xl bg-slate-100 text-slate-400"><Camera size={58}/></div><p className="mt-5 text-center font-semibold">{state?.session?.status==="paused"?"Attendance is paused":state?.session?.status==="closed"?"Attendance session complete":"Camera will be ready at class time"}</p><p className="mt-2 max-w-xs text-center text-sm text-slate-500">Ask the registrar for staff-verified attendance if face recognition is unavailable.</p></>}
       </div>
     </section>
-    <div className="mx-auto mt-5 flex flex-wrap items-center justify-center gap-2"><button type="button" onClick={()=>{setExitPassword("");setExitError("");setExitOpen(true);}} className="rounded-lg bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/20">Return to admin dashboard</button><button type="button" onClick={()=>{window.localStorage.removeItem(pairingKey);setPairing(null);setState(null);}} className="rounded-lg px-3 py-2 text-xs text-slate-500 hover:bg-white/10 hover:text-white">Unpair this kiosk</button></div>
-    {exitOpen&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4"><form onSubmit={(event)=>void returnToDashboard(event)} className="w-full max-w-sm rounded-2xl bg-white p-6 text-slate-900 shadow-2xl"><h2 className="text-lg font-semibold">Confirm dashboard access</h2><p className="mt-1 text-sm leading-5 text-slate-600">Enter the password for the signed-in administrator account to leave kiosk attendance mode.</p><label className="mt-5 block text-sm font-medium">Account password<input autoFocus required type="password" autoComplete="current-password" value={exitPassword} onChange={(event)=>setExitPassword(event.target.value)} className="mt-1.5 w-full rounded-lg border px-3 py-2.5"/></label>{exitError&&<p role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{exitError}</p>}<div className="mt-5 flex justify-end gap-2"><button type="button" onClick={()=>setExitOpen(false)} className="rounded-lg border px-4 py-2 text-sm font-medium">Stay in kiosk</button><button disabled={exitBusy} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{exitBusy?"Checking…":"Verify and return"}</button></div></form></div>}
   </main>;
 }

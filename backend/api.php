@@ -32,7 +32,7 @@ function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null):
     if ($role === 'student') {
         $programId = trim((string)($body['program_id'] ?? ''));
         if ($programId === '') {
-            $programId = (string)$pdo->query("SELECT program_id FROM programs WHERE is_active = 1 ORDER BY FIELD(program_code, 'BSIS', 'BSCS', 'BSIT'), program_code LIMIT 1")->fetchColumn();
+            $programId = (string)$pdo->query("SELECT program_id FROM programs WHERE is_active = 1 ORDER BY FIELD(program_code, 'BSCS', 'BSIT'), program_code LIMIT 1")->fetchColumn();
         }
         $yearLevel = filter_var($body['year_level'] ?? 1, FILTER_VALIDATE_INT);
         if (!$programId || !$yearLevel || $yearLevel < 1 || $yearLevel > 4) {
@@ -96,6 +96,144 @@ function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null):
 }
 
 $storedUploads = [];
+
+function send_workspace_email(string $recipient, string $subject, string $body): array
+{
+    global $localConfig;
+    $sender = getenv('EDUTRACK_MAIL_FROM') ?: ($localConfig['mail_from'] ?? 'paulandrew.samson@cvsu.edu.ph');
+    $senderName = getenv('EDUTRACK_MAIL_FROM_NAME') ?: ($localConfig['mail_from_name'] ?? 'EduTrack Registrar');
+    $username = getenv('EDUTRACK_SMTP_USERNAME') ?: ($localConfig['smtp_username'] ?? '');
+    $password = preg_replace('/\s+/', '', (string)(getenv('EDUTRACK_SMTP_PASSWORD') ?: ($localConfig['smtp_password'] ?? '')));
+
+    if (!filter_var($sender, FILTER_VALIDATE_EMAIL) || $username === '' || $password === '') {
+        return ['status' => 'simulated', 'detail' => 'Google Workspace SMTP credentials are not configured.'];
+    }
+    if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+        error_log('Approval email was not sent because its recipient address is invalid.');
+        return ['status' => 'failed', 'detail' => 'The applicant email address is invalid.'];
+    }
+    if (strlen($password) !== 16) {
+        return ['status' => 'failed', 'detail' => 'The saved Google App Password is incomplete. Generate a new 16-character App Password and save it without changing any characters.'];
+    }
+
+    $encodedSubject = '=?UTF-8?B?' . base64_encode($subject) . '?=';
+    $encodedSenderName = '=?UTF-8?B?' . base64_encode($senderName) . '?=';
+    $message = implode("\r\n", [
+        'Date: ' . date(DATE_RFC2822),
+        'To: <' . $recipient . '>',
+        'From: ' . $encodedSenderName . ' <' . $sender . '>',
+        'Subject: ' . $encodedSubject,
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        'Content-Transfer-Encoding: 8bit',
+        '',
+        str_replace(["\r\n", "\r"], "\n", $body),
+    ]);
+    $message = str_replace("\n", "\r\n", $message);
+    $stream = fopen('php://temp', 'r+');
+    if ($stream === false || fwrite($stream, $message) !== strlen($message)) {
+        if (is_resource($stream)) {
+            fclose($stream);
+        }
+        error_log('Approval email was not sent because its message could not be prepared.');
+        return ['status' => 'failed', 'detail' => 'EduTrack could not prepare the approval email.'];
+    }
+    rewind($stream);
+
+    $curl = curl_init('smtps://smtp.gmail.com:465');
+    if ($curl === false) {
+        fclose($stream);
+        error_log('Approval email was not sent because SMTP could not be initialized.');
+        return ['status' => 'failed', 'detail' => 'EduTrack could not start the secure Google Workspace connection.'];
+    }
+    curl_setopt_array($curl, [
+        CURLOPT_USERNAME => $username,
+        CURLOPT_PASSWORD => $password,
+        CURLOPT_MAIL_FROM => '<' . $sender . '>',
+        CURLOPT_MAIL_RCPT => ['<' . $recipient . '>'],
+        CURLOPT_UPLOAD => true,
+        CURLOPT_READDATA => $stream,
+        CURLOPT_INFILESIZE => strlen($message),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+    ]);
+    $result = curl_exec($curl);
+    $errorNumber = curl_errno($curl);
+    $responseCode = (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+    $status = $result !== false ? 'sent' : 'failed';
+    $detail = 'The email was accepted by Google Workspace.';
+    if ($result === false) {
+        error_log('Approval email delivery failed: cURL error ' . $errorNumber . ', SMTP response ' . $responseCode . '.');
+        if ($errorNumber === 67 || $responseCode === 535 || $responseCode === 534) {
+            $detail = 'Google Workspace rejected the SMTP sign-in. Verify the 16-character App Password and confirm App Passwords are allowed for this Workspace account.';
+        } elseif (in_array($errorNumber, [6, 7, 28], true)) {
+            $detail = 'EduTrack could not reach smtp.gmail.com on port 465. Check the server internet connection or firewall.';
+        } elseif ($responseCode >= 500) {
+            $detail = 'Google Workspace rejected the email (SMTP response ' . $responseCode . '). Check that the sender account is active and permitted to send.';
+        } else {
+            $detail = 'Google Workspace did not accept the email (cURL error ' . $errorNumber . ', SMTP response ' . $responseCode . ').';
+        }
+    }
+    curl_close($curl);
+    fclose($stream);
+    return ['status' => $status, 'detail' => $detail];
+}
+
+function next_student_number(PDO $pdo): string
+{
+    $year = date('Y');
+    $initialize = $pdo->prepare(
+        'INSERT IGNORE INTO student_number_sequences (school_year, last_number) VALUES (:year, 0)'
+    );
+    $initialize->execute(['year' => $year]);
+
+    $sequence = $pdo->prepare(
+        'SELECT last_number FROM student_number_sequences WHERE school_year = :year FOR UPDATE'
+    );
+    $sequence->execute(['year' => $year]);
+    $lastAssigned = (int)$sequence->fetchColumn();
+
+    $existing = $pdo->prepare(
+        'SELECT MAX(CAST(SUBSTRING(student_number, 5) AS UNSIGNED))
+         FROM users
+         WHERE student_number REGEXP \'^[0-9]{9}$\' AND LEFT(student_number, 4) = :year'
+    );
+    $existing->execute(['year' => $year]);
+    $next = max($lastAssigned + 1, (int)$existing->fetchColumn() + 1);
+    if ($next > 99999) {
+        throw new RuntimeException('The student number sequence for this year is full.');
+    }
+
+    $save = $pdo->prepare(
+        'UPDATE student_number_sequences SET last_number = :number WHERE school_year = :year'
+    );
+    $save->execute(['number' => $next, 'year' => $year]);
+    return sprintf('%04d%05d', (int)$year, $next);
+}
+
+function generated_student_email(PDO $pdo, string $firstName, string $lastName): string
+{
+    $parts = [];
+    foreach ([$firstName, $lastName] as $name) {
+        $ascii = function_exists('iconv') ? iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $name) : false;
+        $slug = strtolower(trim((string)preg_replace('/[^a-zA-Z0-9]+/', '.', $ascii === false ? $name : $ascii), '.'));
+        $parts[] = $slug !== '' ? $slug : 'student';
+    }
+    $base = implode('.', $parts);
+    $candidate = $base . '@edutrack.edu.ph';
+    $suffix = 2;
+    $check = $pdo->prepare('SELECT 1 FROM users WHERE email = :email LIMIT 1');
+    while (true) {
+        $check->execute(['email' => $candidate]);
+        if (!$check->fetchColumn()) {
+            return $candidate;
+        }
+        $candidate = $base . $suffix . '@edutrack.edu.ph';
+        $suffix++;
+    }
+}
 
 function student_registration_term(PDO $pdo, int $userId): ?array
 {
@@ -280,6 +418,72 @@ function registration_document_uploads(int $yearLevel): array
     return $uploads;
 }
 
+function registration_photo_upload(): array
+{
+    $file = $_FILES['application_photo'] ?? null;
+    if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        send_json(422, ['error' => 'Upload a 2×2 applicant photo to complete the freshman application.']);
+    }
+    if (!is_uploaded_file((string)$file['tmp_name'])
+        || (int)$file['size'] < 1
+        || (int)$file['size'] > 5 * 1024 * 1024) {
+        send_json(422, ['error' => 'The applicant photo must be 5 MB or smaller.']);
+    }
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mimeType = $finfo->file((string)$file['tmp_name']);
+    $imageInfo = getimagesize((string)$file['tmp_name']);
+    if (!in_array($mimeType, ['image/jpeg', 'image/png'], true)
+        || $imageInfo === false
+        || $imageInfo['mime'] !== $mimeType
+        || (int)$imageInfo[0] < 300
+        || (int)$imageInfo[1] < 300) {
+        send_json(422, ['error' => 'Upload a clear JPG or PNG applicant photo at least 300×300 pixels.']);
+    }
+    $originalFilename = trim(basename(str_replace('\\', '/', (string)$file['name'])));
+    if ($originalFilename === '' || strlen($originalFilename) > 255) {
+        send_json(422, ['error' => 'The applicant photo filename is invalid.']);
+    }
+    return [
+        'tmp_name' => (string)$file['tmp_name'],
+        'original_filename' => $originalFilename,
+        'mime_type' => $mimeType,
+        'size_bytes' => (int)$file['size'],
+        'storage_filename' => bin2hex(random_bytes(16)) . ($mimeType === 'image/png' ? '.png' : '.jpg'),
+    ];
+}
+
+function registration_processing_fee_receipt_upload(): array
+{
+    $file = $_FILES['processing_fee_receipt'] ?? null;
+    if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        send_json(422, ['error' => 'Upload a screenshot of the ₱75 processing fee receipt.']);
+    }
+    if (!is_uploaded_file((string)$file['tmp_name'])
+        || (int)$file['size'] < 1
+        || (int)$file['size'] > 5 * 1024 * 1024) {
+        send_json(422, ['error' => 'The processing fee screenshot must be 5 MB or smaller.']);
+    }
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mimeType = $finfo->file((string)$file['tmp_name']);
+    $imageInfo = getimagesize((string)$file['tmp_name']);
+    if (!in_array($mimeType, ['image/jpeg', 'image/png'], true)
+        || $imageInfo === false
+        || $imageInfo['mime'] !== $mimeType) {
+        send_json(422, ['error' => 'Upload the processing fee receipt as a JPG or PNG image.']);
+    }
+    $originalFilename = trim(basename(str_replace('\\', '/', (string)$file['name'])));
+    if ($originalFilename === '' || strlen($originalFilename) > 255) {
+        send_json(422, ['error' => 'The processing fee screenshot filename is invalid.']);
+    }
+    return [
+        'tmp_name' => (string)$file['tmp_name'],
+        'original_filename' => $originalFilename,
+        'mime_type' => $mimeType,
+        'size_bytes' => (int)$file['size'],
+        'storage_filename' => bin2hex(random_bytes(16)) . ($mimeType === 'image/png' ? '.png' : '.jpg'),
+    ];
+}
+
 function compreface_new_subject(string $type, int $id): string
 {
     if (!in_array($type, ['student', 'registration'], true)) {
@@ -371,6 +575,51 @@ try {
         send_json(200, ['programs' => $programs]);
     }
 
+    if ($action === 'student_registration_email_retry') {
+        request_method('POST');
+        require_user('registrar');
+        $body = request_body();
+        $requestId = filter_var($body['request_id'] ?? null, FILTER_VALIDATE_INT);
+        if (!$requestId) {
+            send_json(422, ['error' => 'Select a valid approved application.']);
+        }
+        $accountQuery = $pdo->prepare(
+            'SELECT r.request_id, r.email AS personal_email, u.full_name, u.email AS school_email,
+                    u.student_number, u.must_change_password
+             FROM student_registration_requests r
+             JOIN users u ON u.user_id = r.created_user_id AND u.role = \'student\'
+             WHERE r.request_id = :request_id AND r.request_status = \'approved\'
+             LIMIT 1'
+        );
+        $accountQuery->execute(['request_id' => $requestId]);
+        $account = $accountQuery->fetch();
+        if (!$account) {
+            send_json(404, ['error' => 'The approved application or its student account was not found.']);
+        }
+        if (!(bool)$account['must_change_password'] || !$account['student_number']) {
+            send_json(409, ['error' => 'The student has already changed the temporary password. For security, EduTrack cannot resend it.']);
+        }
+        $subject = 'Your EduTrack student account';
+        $emailBody = "Hello {$account['full_name']},\n\nYour EduTrack application has been approved. Use these details to sign in:\n\nSchool email: {$account['school_email']}\nTemporary password (student number): {$account['student_number']}\n\nAfter your first login, you must change your password before continuing.\n\nEduTrack Registrar";
+        $delivery = send_workspace_email($account['personal_email'], $subject, $emailBody);
+        $preview = [
+            'request_id' => (int)$account['request_id'],
+            'to' => $account['personal_email'],
+            'subject' => $subject,
+            'body' => $emailBody,
+            'school_email' => $account['school_email'],
+            'student_number' => $account['student_number'],
+            'delivery_status' => $delivery['status'],
+            'delivery_detail' => $delivery['detail'],
+        ];
+        $message = $delivery['status'] === 'sent'
+            ? 'The student account email was sent.'
+            : ($delivery['status'] === 'failed'
+                ? 'The student account email could not be sent. Review the delivery details below.'
+                : 'Google Workspace SMTP is not configured. Review the preview below.');
+        send_json(200, ['message' => $message, 'email_preview' => $preview]);
+    }
+
     if ($action === 'student_registrations') {
         if ($method === 'POST') {
             $body = isset($_POST['registration_data'])
@@ -379,7 +628,6 @@ try {
             if (!is_array($body)) {
                 send_json(422, ['error' => 'Registration details are invalid. Please check the form and try again.']);
             }
-            $studentNumber = trim((string)($body['student_number'] ?? ''));
             $firstName = trim((string)($body['first_name'] ?? ''));
             $lastName = trim((string)($body['last_name'] ?? ''));
             $suffix = trim((string)($body['suffix'] ?? ''));
@@ -388,26 +636,68 @@ try {
             $yearLevel = filter_var($body['year_level'] ?? null, FILTER_VALIDATE_INT);
             $email = strtolower(trim((string)($body['email'] ?? '')));
             $phone = trim((string)($body['phone'] ?? ''));
-            $password = (string)($body['password'] ?? '');
+            $rawApplicationDetails = $body['application_details'] ?? null;
             $faceImages = compreface_images($body);
             $birthDate = DateTimeImmutable::createFromFormat('!Y-m-d', $dateOfBirth);
             $birthDateErrors = DateTimeImmutable::getLastErrors();
 
-            if ($studentNumber === '' || mb_strlen($studentNumber) > 30
-                || $firstName === '' || mb_strlen($firstName) > 80
+            if (!is_array($rawApplicationDetails)) {
+                send_json(422, ['error' => 'Complete the freshman application details and try again.']);
+            }
+            $applicationDetails = [];
+            foreach ($rawApplicationDetails as $key => $value) {
+                if (!is_string($key) || !preg_match('/^[a-z][a-z0-9_]{0,49}$/', $key)
+                    || (!is_string($value) && !is_numeric($value) && $value !== null)) {
+                    send_json(422, ['error' => 'One or more application details are invalid.']);
+                }
+                $cleanValue = trim((string)($value ?? ''));
+                if (mb_strlen($cleanValue) > 500) {
+                    send_json(422, ['error' => 'Application text fields must be 500 characters or fewer.']);
+                }
+                $applicationDetails[$key] = $cleanValue;
+            }
+            foreach ([
+                'middle_name', 'sex', 'permanent_address', 'place_of_birth', 'civil_status', 'citizenship', 'religion', 'height_cm', 'weight_kg',
+                'father_name', 'father_occupation', 'mother_name', 'mother_occupation', 'language_dialect',
+                'emergency_contact_person', 'emergency_contact_address', 'emergency_contact_no',
+                'elementary_school', 'elementary_year_graduated', 'high_school', 'high_school_year_graduated',
+                'reference_1_name', 'reference_1_contact', 'reference_2_name', 'reference_2_contact', 'reference_3_name', 'reference_3_contact',
+            ] as $requiredDetail) {
+                if (trim((string)($applicationDetails[$requiredDetail] ?? '')) === '') {
+                    send_json(422, ['error' => 'Complete all required personal, education, and character reference fields.']);
+                }
+            }
+            foreach (['elementary_year_graduated', 'high_school_year_graduated'] as $graduationYearField) {
+                if (!preg_match('/^\d{4}$/', (string)$applicationDetails[$graduationYearField])) {
+                    send_json(422, ['error' => 'Enter a four-digit graduation year for elementary and high school.']);
+                }
+            }
+            if (!in_array($applicationDetails['sex'] ?? '', ['Male', 'Female'], true)
+                || !in_array($applicationDetails['civil_status'] ?? '', ['Single', 'Married', 'Widowed', 'Separated', 'Other'], true)) {
+                send_json(422, ['error' => 'Choose a valid sex and civil status.']);
+            }
+            $applicationDetailsJson = json_encode($applicationDetails, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+            if (strlen($applicationDetailsJson) > 20000) {
+                send_json(422, ['error' => 'Application details are too long.']);
+            }
+
+            if ($firstName === '' || mb_strlen($firstName) > 80
                 || $lastName === '' || mb_strlen($lastName) > 80
+                || mb_strlen((string)$applicationDetails['middle_name']) > 80
+                || mb_strlen(trim(implode(' ', [$firstName, $applicationDetails['middle_name'], $lastName, $suffix]))) > 160
                 || mb_strlen($suffix) > 20
                 || $programId === '' || mb_strlen($programId) > 10
-                || !$yearLevel || $yearLevel < 1 || $yearLevel > 4
+                || !$yearLevel || (int)$yearLevel !== 1
                 || !filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($email) > 254
-                || strlen($phone) > 40
-                || strlen($password) < 8
+                || $phone === '' || strlen($phone) > 40
                 || !$birthDate || ($birthDateErrors !== false && ($birthDateErrors['warning_count'] || $birthDateErrors['error_count']))
                 || $birthDate->format('Y-m-d') !== $dateOfBirth
                 || $birthDate > new DateTimeImmutable('today')) {
-                send_json(422, ['error' => 'Check the required fields. Use a valid student number, name, past date of birth, program, year level, email, and a password of at least 8 characters.']);
+                send_json(422, ['error' => 'Check the required freshman application fields, including name, past date of birth, program, and a valid email address.']);
             }
             $documentUploads = registration_document_uploads((int)$yearLevel);
+            $photoUpload = registration_photo_upload();
+            $processingFeeReceiptUpload = registration_processing_fee_receipt_upload();
 
             $program = $pdo->prepare('SELECT 1 FROM programs WHERE program_id = :program_id AND is_active = 1');
             $program->execute(['program_id' => $programId]);
@@ -419,31 +709,27 @@ try {
             $duplicate = $pdo->prepare(
                 'SELECT 1 FROM users WHERE email = :email
                  UNION ALL
-                 SELECT 1 FROM users WHERE student_number = :student_number
-                 UNION ALL
                  SELECT 1 FROM student_registration_requests
                    WHERE request_status = \'pending\'
-                     AND (student_number = :pending_number OR email = :pending_email)
+                     AND email = :pending_email
                  LIMIT 1'
             );
             $duplicate->execute([
                 'email' => $email,
-                'student_number' => $studentNumber,
-                'pending_number' => $studentNumber,
                 'pending_email' => $email,
             ]);
             if ($duplicate->fetchColumn()) {
                 $pdo->rollBack();
-                send_json(409, ['error' => 'That email address or student number is already registered or has a pending request.']);
+                send_json(409, ['error' => 'That email address is already registered or has a pending request.']);
             }
 
             $insert = $pdo->prepare(
                 'INSERT INTO student_registration_requests
-                   (student_number, first_name, last_name, name_suffix, date_of_birth, program_id, year_level, email, phone, password_hash)
-                 VALUES (:student_number, :first_name, :last_name, :name_suffix, :date_of_birth, :program_id, :year_level, :email, :phone, :password_hash)'
+                   (student_number, first_name, last_name, name_suffix, date_of_birth, program_id, year_level, email, phone, application_details, password_hash, processing_fee_receipt_required)
+                 VALUES (:student_number, :first_name, :last_name, :name_suffix, :date_of_birth, :program_id, :year_level, :email, :phone, :application_details, :password_hash, 1)'
             );
             $insert->execute([
-                'student_number' => $studentNumber,
+                'student_number' => null,
                 'first_name' => $firstName,
                 'last_name' => $lastName,
                 'name_suffix' => $suffix !== '' ? $suffix : null,
@@ -452,7 +738,8 @@ try {
                 'year_level' => $yearLevel,
                 'email' => $email,
                 'phone' => $phone !== '' ? $phone : null,
-                'password_hash' => password_hash($password, PASSWORD_DEFAULT),
+                'application_details' => $applicationDetailsJson,
+                'password_hash' => null,
             ]);
             $requestId = (int)$pdo->lastInsertId();
             if ($documentUploads) {
@@ -483,6 +770,47 @@ try {
                     ]);
                 }
             }
+            $photoStorageDirectory = private_registration_storage_directory()
+                . DIRECTORY_SEPARATOR . 'registration-documents';
+            if (!is_dir($photoStorageDirectory)
+                && !mkdir($photoStorageDirectory, 0700, true)
+                && !is_dir($photoStorageDirectory)) {
+                throw new RuntimeException('Unable to create private application photo storage.');
+            }
+            $photoDestination = $photoStorageDirectory . DIRECTORY_SEPARATOR . $photoUpload['storage_filename'];
+            if (!move_uploaded_file($photoUpload['tmp_name'], $photoDestination)) {
+                throw new RuntimeException('Unable to store the submitted applicant photo.');
+            }
+            $storedUploads[] = $photoDestination;
+            $savePhoto = $pdo->prepare(
+                'INSERT INTO student_registration_request_photos
+                   (request_id, original_filename, storage_filename, mime_type, size_bytes)
+                 VALUES (:request_id, :original_filename, :storage_filename, :mime_type, :size_bytes)'
+            );
+            $savePhoto->execute([
+                'request_id' => $requestId,
+                'original_filename' => $photoUpload['original_filename'],
+                'storage_filename' => $photoUpload['storage_filename'],
+                'mime_type' => $photoUpload['mime_type'],
+                'size_bytes' => $photoUpload['size_bytes'],
+            ]);
+            $receiptDestination = $photoStorageDirectory . DIRECTORY_SEPARATOR . $processingFeeReceiptUpload['storage_filename'];
+            if (!move_uploaded_file($processingFeeReceiptUpload['tmp_name'], $receiptDestination)) {
+                throw new RuntimeException('Unable to store the processing fee receipt screenshot.');
+            }
+            $storedUploads[] = $receiptDestination;
+            $saveReceipt = $pdo->prepare(
+                'INSERT INTO student_registration_request_processing_fee_receipts
+                   (request_id, original_filename, storage_filename, mime_type, size_bytes)
+                 VALUES (:request_id, :original_filename, :storage_filename, :mime_type, :size_bytes)'
+            );
+            $saveReceipt->execute([
+                'request_id' => $requestId,
+                'original_filename' => $processingFeeReceiptUpload['original_filename'],
+                'storage_filename' => $processingFeeReceiptUpload['storage_filename'],
+                'mime_type' => $processingFeeReceiptUpload['mime_type'],
+                'size_bytes' => $processingFeeReceiptUpload['size_bytes'],
+            ]);
             $subject = compreface_new_subject('registration', $requestId);
             compreface_register_images($subject, $faceImages);
             try {
@@ -498,7 +826,7 @@ try {
             }
             $pdo->commit();
             send_json(201, [
-                'message' => 'Registration request submitted. You can sign in after the registrar approves it.',
+                'message' => 'Application submitted for registrar review. Account setup and account details will be handled separately after approval.',
                 'request_id' => $requestId,
             ]);
         }
@@ -506,16 +834,22 @@ try {
         $registrar = require_user('registrar');
         if ($method === 'GET') {
         $requests = $pdo->query(
-            'SELECT r.request_id, r.student_number, r.first_name, r.last_name, r.name_suffix,
+            'SELECT r.request_id, r.student_number, r.first_name, r.last_name, r.name_suffix, u.email AS school_email,
                     r.date_of_birth, r.program_id, r.year_level,
-                    r.email, r.phone, r.request_status, r.created_at, r.reviewed_at,
+                    r.email, r.phone, r.application_details, r.request_status, r.created_at, r.reviewed_at,
+                    r.processing_fee_receipt_required,
                     p.program_code, p.program_name,
                     (SELECT COUNT(*) FROM student_registration_request_documents d
                      WHERE d.request_id = r.request_id) AS document_count
              FROM student_registration_requests r
+             LEFT JOIN users u ON u.user_id = r.created_user_id
              LEFT JOIN programs p ON p.program_id = r.program_id
              ORDER BY CASE r.request_status WHEN \'pending\' THEN 0 ELSE 1 END, r.created_at DESC'
         )->fetchAll();
+        foreach ($requests as &$request) {
+            $request['application_details'] = json_decode((string)($request['application_details'] ?? '{}'), true) ?: [];
+        }
+        unset($request);
         $documents = $pdo->prepare(
             'SELECT document_id, slot_number, original_filename, size_bytes
              FROM student_registration_request_documents
@@ -524,6 +858,23 @@ try {
         foreach ($requests as &$request) {
             $documents->execute(['request_id' => $request['request_id']]);
             $request['documents'] = $documents->fetchAll();
+        }
+        unset($request);
+        $photos = $pdo->prepare(
+            'SELECT original_filename FROM student_registration_request_photos WHERE request_id = :request_id'
+        );
+        foreach ($requests as &$request) {
+            $photos->execute(['request_id' => $request['request_id']]);
+            $request['photo'] = $photos->fetch() ?: null;
+        }
+        unset($request);
+        $receipts = $pdo->prepare(
+            'SELECT original_filename, mime_type, size_bytes
+             FROM student_registration_request_processing_fee_receipts WHERE request_id = :request_id'
+        );
+        foreach ($requests as &$request) {
+            $receipts->execute(['request_id' => $request['request_id']]);
+            $request['processing_fee_receipt'] = $receipts->fetch() ?: null;
         }
         unset($request);
         $programs = $pdo->query(
@@ -543,8 +894,8 @@ try {
             $pdo->beginTransaction();
             $requestQuery = $pdo->prepare(
                 'SELECT r.request_id, r.student_number, r.first_name, r.last_name, r.name_suffix,
-                        r.date_of_birth, r.email, r.password_hash, r.request_status,
-                        r.program_id, r.year_level, r.phone
+                        r.date_of_birth, r.email, r.phone, r.application_details, r.request_status,
+                        r.program_id, r.year_level, r.processing_fee_receipt_required
                  FROM student_registration_requests r
                  WHERE r.request_id = :request_id FOR UPDATE'
             );
@@ -564,66 +915,97 @@ try {
                     $pdo->rollBack();
                     send_json(409, ['error' => 'First-year registration cannot be approved until all required documents are submitted.']);
                 }
+                $photoCount = $pdo->prepare(
+                    'SELECT COUNT(*) FROM student_registration_request_photos
+                     WHERE request_id = :request_id'
+                );
+                $photoCount->execute(['request_id' => $requestId]);
+                if ((int)$photoCount->fetchColumn() !== 1) {
+                    $pdo->rollBack();
+                    send_json(409, ['error' => 'First-year registration cannot be approved until the required 2×2 photo is submitted.']);
+                }
+                if ((bool)$registration['processing_fee_receipt_required']) {
+                    $receiptCount = $pdo->prepare(
+                        'SELECT COUNT(*) FROM student_registration_request_processing_fee_receipts
+                         WHERE request_id = :request_id'
+                    );
+                    $receiptCount->execute(['request_id' => $requestId]);
+                    if ((int)$receiptCount->fetchColumn() !== 1) {
+                        $pdo->rollBack();
+                        send_json(409, ['error' => 'This application cannot be approved until its processing fee receipt is submitted.']);
+                    }
+                }
             }
 
             $createdUserId = null;
+            $assignedStudentNumber = null;
+            $approvalEmailPreview = null;
+
             if ($status === 'approved') {
                 if (!$registration['program_id'] || !$registration['year_level']) {
                     $pdo->rollBack();
-                    send_json(422, ['error' => 'This request has no valid program and year level. Ask the student to submit a new registration.']);
+                    send_json(422, ['error' => 'This request has no valid program and year level.']);
                 }
-                $programId = $registration['program_id'];
-                $yearLevel = (int)$registration['year_level'];
-                $existing = $pdo->prepare(
-                    'SELECT 1 FROM users WHERE email = :email
-                     UNION ALL SELECT 1 FROM users WHERE student_number = :student_number LIMIT 1'
-                );
-                $existing->execute([
-                    'email' => $registration['email'],
-                    'student_number' => $registration['student_number'],
-                ]);
-                if ($existing->fetchColumn()) {
+                $pendingFace = $pdo->prepare('SELECT compreface_subject, consent_at FROM pending_compreface_student_faces WHERE request_id = :request_id FOR UPDATE');
+                $pendingFace->execute(['request_id' => $requestId]);
+                $faceRow = $pendingFace->fetch();
+                if (!$faceRow) {
                     $pdo->rollBack();
-                    send_json(409, ['error' => 'The email or student number was registered while this request was pending. Resolve the duplicate before approving.']);
+                    send_json(409, ['error' => 'This application has no enrolled face data. The student must submit a new application.']);
                 }
 
+                $assignedStudentNumber = next_student_number($pdo);
+                $schoolEmail = generated_student_email($pdo, $registration['first_name'], $registration['last_name']);
+                $applicationDetails = json_decode((string)($registration['application_details'] ?? '{}'), true) ?: [];
                 $fullName = trim(implode(' ', array_filter([
                     $registration['first_name'],
+                    $applicationDetails['middle_name'] ?? null,
                     $registration['last_name'],
                     $registration['name_suffix'],
                 ], static fn($part) => $part !== null && $part !== '')));
                 $createUser = $pdo->prepare(
                     'INSERT INTO users
-                       (full_name, email, phone, password_hash, role, account_status, student_number,
-                        first_name, last_name, name_suffix, date_of_birth, program_id, year_level,
-                        student_status)
+                       (full_name, email, personal_email, phone, address, password_hash, role, account_status,
+                        must_change_password, student_number, first_name, last_name, name_suffix, date_of_birth,
+                        program_id, year_level, student_status)
                      VALUES
-                       (:full_name, :email, :phone, :password_hash, \'student\', \'active\', :student_number,
-                        :first_name, :last_name, :name_suffix, :date_of_birth, :program_id, :year_level,
-                        \'active\')'
+                       (:full_name, :email, :personal_email, :phone, :address, :password_hash, \'student\', \'active\',
+                        1, :student_number, :first_name, :last_name, :name_suffix, :date_of_birth,
+                        :program_id, :year_level, \'active\')'
                 );
                 $createUser->execute([
                     'full_name' => $fullName,
-                    'email' => $registration['email'],
+                    'email' => $schoolEmail,
+                    'personal_email' => $registration['email'],
                     'phone' => $registration['phone'],
-                    'password_hash' => $registration['password_hash'],
-                    'student_number' => $registration['student_number'],
+                    'address' => trim((string)($applicationDetails['permanent_address'] ?? '')) ?: null,
+                    'password_hash' => password_hash($assignedStudentNumber, PASSWORD_DEFAULT),
+                    'student_number' => $assignedStudentNumber,
                     'first_name' => $registration['first_name'],
                     'last_name' => $registration['last_name'],
                     'name_suffix' => $registration['name_suffix'],
                     'date_of_birth' => $registration['date_of_birth'],
-                    'program_id' => $programId,
-                    'year_level' => $yearLevel,
+                    'program_id' => $registration['program_id'],
+                    'year_level' => (int)$registration['year_level'],
                 ]);
                 $createdUserId = (int)$pdo->lastInsertId();
-                $pendingFace = $pdo->prepare('SELECT compreface_subject, consent_at FROM pending_compreface_student_faces WHERE request_id = :request_id FOR UPDATE');
-                $pendingFace->execute(['request_id' => $requestId]);
-                $faceRow = $pendingFace->fetch();
-                if (!$faceRow) { $pdo->rollBack(); send_json(409, ['error' => 'This request has no enrolled face template. Ask the student to submit a new registration.']); }
                 $saveFace = $pdo->prepare('INSERT INTO compreface_student_faces (student_user_id, compreface_subject, template_status, consent_at) VALUES (:student_user_id, :subject, \'active\', :consent_at)');
                 $saveFace->execute(['student_user_id' => $createdUserId, 'subject' => $faceRow['compreface_subject'], 'consent_at' => $faceRow['consent_at']]);
                 $deleteFace = $pdo->prepare('DELETE FROM pending_compreface_student_faces WHERE request_id = :request_id');
                 $deleteFace->execute(['request_id' => $requestId]);
+
+                $subject = 'Your EduTrack student account';
+                $emailBody = "Hello {$fullName},\n\nYour EduTrack application has been approved. Use these details to sign in:\n\nSchool email: {$schoolEmail}\nTemporary password (student number): {$assignedStudentNumber}\n\nAfter your first login, you must change your password before continuing.\n\nEduTrack Registrar";
+                $approvalEmailPreview = [
+                    'request_id' => $requestId,
+                    'to' => $registration['email'],
+                    'subject' => $subject,
+                    'body' => $emailBody,
+                    'school_email' => $schoolEmail,
+                    'student_number' => $assignedStudentNumber,
+                    'delivery_status' => 'simulated',
+                    'delivery_detail' => '',
+                ];
             }
 
             if ($status === 'rejected') {
@@ -639,18 +1021,40 @@ try {
 
             $update = $pdo->prepare(
                 'UPDATE student_registration_requests
-                 SET request_status = :status, password_hash = NULL, reviewed_by_user_id = :reviewer,
+                 SET request_status = :status, student_number = :student_number, password_hash = NULL, reviewed_by_user_id = :reviewer,
                      reviewed_at = NOW(), created_user_id = :created_user_id
                  WHERE request_id = :request_id'
             );
             $update->execute([
                 'status' => $status,
+                'student_number' => $assignedStudentNumber,
                 'reviewer' => $registrar['user_id'],
                 'created_user_id' => $createdUserId,
                 'request_id' => $requestId,
             ]);
             $pdo->commit();
-            send_json(200, ['message' => $status === 'approved' ? 'Registration approved. The student account is now active.' : 'Registration request rejected.']);
+            if ($status === 'approved' && $approvalEmailPreview !== null) {
+                $delivery = send_workspace_email(
+                    $approvalEmailPreview['to'],
+                    $approvalEmailPreview['subject'],
+                    $approvalEmailPreview['body']
+                );
+                $approvalEmailPreview['delivery_status'] = $delivery['status'];
+                $approvalEmailPreview['delivery_detail'] = $delivery['detail'];
+            }
+            if ($status !== 'approved') {
+                $responseMessage = 'Registration request rejected.';
+            } elseif ($approvalEmailPreview['delivery_status'] === 'sent') {
+                $responseMessage = 'Application approved. The student account details were emailed to the applicant.';
+            } elseif ($approvalEmailPreview['delivery_status'] === 'failed') {
+                $responseMessage = 'Application approved and the student account was created, but email delivery failed. Use the preview to provide the account details.';
+            } else {
+                $responseMessage = 'Application approved and the student account was created. Configure Google Workspace SMTP to email the account details.';
+            }
+            send_json(200, [
+                'message' => $responseMessage,
+                'email_preview' => $approvalEmailPreview,
+            ]);
         }
 
         request_method('GET');
@@ -667,7 +1071,7 @@ try {
         }
 
         $statement = $pdo->prepare(
-            'SELECT user_id, full_name, email, password_hash, role
+            'SELECT user_id, full_name, email, password_hash, role, must_change_password
              FROM users
              WHERE email = :email AND account_status = \'active\'
              LIMIT 1'
@@ -697,6 +1101,7 @@ try {
             'full_name' => $account['full_name'],
             'email' => $account['email'],
             'role' => $account['role'],
+            'must_change_password' => (bool)$account['must_change_password'],
         ];
 
         $update = $pdo->prepare('UPDATE users SET last_login_at = NOW() WHERE user_id = :user_id');
@@ -705,23 +1110,75 @@ try {
         send_json(200, ['user' => $_SESSION['edutrack_user']]);
     }
 
+    if ($action === 'change_password') {
+        request_method('POST');
+        $sessionUser = $_SESSION['edutrack_user'] ?? null;
+        if (!is_array($sessionUser) || empty($sessionUser['user_id'])) {
+            send_json(401, ['error' => 'Please sign in to change your password.']);
+        }
+        $body = request_body();
+        $currentPassword = (string)($body['current_password'] ?? '');
+        $newPassword = (string)($body['new_password'] ?? '');
+        if ($currentPassword === '' || strlen($newPassword) < 8 || strlen($newPassword) > 200) {
+            send_json(422, ['error' => 'Enter your current password and a new password of at least 8 characters.']);
+        }
+        $accountQuery = $pdo->prepare('SELECT password_hash FROM users WHERE user_id = :user_id AND account_status = \'active\'');
+        $accountQuery->execute(['user_id' => $sessionUser['user_id']]);
+        $passwordHash = $accountQuery->fetchColumn();
+        if (!is_string($passwordHash) || !password_verify($currentPassword, $passwordHash)) {
+            send_json(422, ['error' => 'Your current password is incorrect.']);
+        }
+        if (password_verify($newPassword, $passwordHash)) {
+            send_json(422, ['error' => 'Choose a new password different from your temporary password.']);
+        }
+        $change = $pdo->prepare('UPDATE users SET password_hash = :password_hash, must_change_password = 0 WHERE user_id = :user_id');
+        $change->execute([
+            'password_hash' => password_hash($newPassword, PASSWORD_DEFAULT),
+            'user_id' => $sessionUser['user_id'],
+        ]);
+        session_regenerate_id(true);
+        $_SESSION['edutrack_user']['must_change_password'] = false;
+        send_json(200, ['message' => 'Password updated. You can now continue to EduTrack.']);
+    }
+
     if ($action === 'me') {
         request_method('GET');
         send_json(200, ['user' => require_user()]);
     }
 
-    if ($action === 'verify_dashboard_password') {
-        request_method('POST');
-        $user = require_user('admin');
-        $password = (string)(request_body()['password'] ?? '');
-        if ($password === '') send_json(422, ['error' => 'Enter the account password to leave kiosk mode.']);
-        $statement = $pdo->prepare('SELECT password_hash FROM users WHERE user_id = :user_id AND account_status = \'active\' LIMIT 1');
-        $statement->execute(['user_id' => $user['user_id']]);
-        $passwordHash = $statement->fetchColumn();
-        if (!is_string($passwordHash) || !password_verify($password, $passwordHash)) {
-            send_json(403, ['error' => 'That password did not match the signed-in administrator account.']);
+    if ($action === 'student_application') {
+        request_method('GET');
+        $student = require_user('student');
+        $applicationQuery = $pdo->prepare(
+            'SELECT r.request_id, r.student_number, r.first_name, r.last_name, r.name_suffix,
+                    r.date_of_birth, r.email AS applicant_email, r.phone, r.application_details,
+                    r.request_status, r.created_at, r.reviewed_at, r.year_level,
+                    p.program_code, p.program_name
+             FROM student_registration_requests r
+             LEFT JOIN programs p ON p.program_id = r.program_id
+             WHERE r.created_user_id = :user_id AND r.request_status = \'approved\'
+             ORDER BY r.reviewed_at DESC, r.request_id DESC LIMIT 1'
+        );
+        $applicationQuery->execute(['user_id' => $student['user_id']]);
+        $application = $applicationQuery->fetch();
+        if (!$application) {
+            send_json(200, ['application' => null]);
         }
-        send_json(200, ['verified' => true]);
+        $application['application_details'] = json_decode((string)($application['application_details'] ?? '{}'), true) ?: [];
+        $documentQuery = $pdo->prepare(
+            'SELECT document_id, slot_number, original_filename, size_bytes, uploaded_at
+             FROM student_registration_request_documents
+             WHERE request_id = :request_id ORDER BY slot_number'
+        );
+        $documentQuery->execute(['request_id' => $application['request_id']]);
+        $application['documents'] = $documentQuery->fetchAll();
+        $photoQuery = $pdo->prepare(
+            'SELECT original_filename, mime_type
+             FROM student_registration_request_photos WHERE request_id = :request_id'
+        );
+        $photoQuery->execute(['request_id' => $application['request_id']]);
+        $application['photo'] = $photoQuery->fetch() ?: null;
+        send_json(200, ['application' => $application]);
     }
 
     if ($action === 'logout') {
@@ -1049,22 +1506,124 @@ try {
         request_method('GET');
     }
 
-    if ($action === 'student_registration_request_document_file') {
+    if ($action === 'student_application_photo') {
+        request_method('GET');
+        $student = require_user('student');
+        $photoQuery = $pdo->prepare(
+            'SELECT p.storage_filename, p.mime_type
+             FROM student_registration_request_photos p
+             JOIN student_registration_requests r ON r.request_id = p.request_id
+             WHERE r.created_user_id = :user_id AND r.request_status = \'approved\'
+             ORDER BY r.reviewed_at DESC, r.request_id DESC LIMIT 1'
+        );
+        $photoQuery->execute(['user_id' => $student['user_id']]);
+        $photo = $photoQuery->fetch();
+        if (!$photo) {
+            send_json(404, ['error' => 'The applicant photo was not found.']);
+        }
+        $path = private_registration_storage_directory()
+            . DIRECTORY_SEPARATOR . 'registration-documents'
+            . DIRECTORY_SEPARATOR . $photo['storage_filename'];
+        if (!is_file($path) || !is_readable($path)) {
+            send_json(404, ['error' => 'The stored applicant photo is unavailable.']);
+        }
+        header('Content-Type: ' . $photo['mime_type']);
+        header('Content-Length: ' . (string)filesize($path));
+        header('Cache-Control: private, no-store');
+        readfile($path);
+        exit;
+    }
+
+    if ($action === 'student_registration_request_photo') {
+        request_method('GET');
+        $viewer = require_user();
+        $requestId = filter_var($_GET['request_id'] ?? null, FILTER_VALIDATE_INT);
+        if (!$requestId) {
+            send_json(422, ['error' => 'A valid application is required.']);
+        }
+        $photoQuery = $pdo->prepare(
+            'SELECT p.storage_filename, p.mime_type, r.created_user_id, r.request_status
+             FROM student_registration_request_photos p
+             JOIN student_registration_requests r ON r.request_id = p.request_id
+             WHERE p.request_id = :request_id'
+        );
+        $photoQuery->execute(['request_id' => $requestId]);
+        $photo = $photoQuery->fetch();
+        if (!$photo) {
+            send_json(404, ['error' => 'The applicant photo was not found.']);
+        }
+        if ($viewer['role'] !== 'registrar'
+            && !($viewer['role'] === 'student'
+                && $photo['request_status'] === 'approved'
+                && (int)$photo['created_user_id'] === (int)$viewer['user_id'])) {
+            send_json(403, ['error' => 'You cannot view this applicant photo.']);
+        }
+        $path = private_registration_storage_directory()
+            . DIRECTORY_SEPARATOR . 'registration-documents'
+            . DIRECTORY_SEPARATOR . $photo['storage_filename'];
+        if (!is_file($path) || !is_readable($path)) {
+            send_json(404, ['error' => 'The stored applicant photo is unavailable.']);
+        }
+        header('Content-Type: ' . $photo['mime_type']);
+        header('Content-Length: ' . (string)filesize($path));
+        header('Cache-Control: private, no-store');
+        readfile($path);
+        exit;
+    }
+
+    if ($action === 'student_registration_request_processing_fee_receipt') {
         request_method('GET');
         require_user('registrar');
+        $requestId = filter_var($_GET['request_id'] ?? null, FILTER_VALIDATE_INT);
+        if (!$requestId) {
+            send_json(422, ['error' => 'A valid application is required.']);
+        }
+        $receiptQuery = $pdo->prepare(
+            'SELECT original_filename, storage_filename, mime_type
+             FROM student_registration_request_processing_fee_receipts WHERE request_id = :request_id'
+        );
+        $receiptQuery->execute(['request_id' => $requestId]);
+        $receipt = $receiptQuery->fetch();
+        if (!$receipt) {
+            send_json(404, ['error' => 'The processing fee receipt was not found.']);
+        }
+        $path = private_registration_storage_directory()
+            . DIRECTORY_SEPARATOR . 'registration-documents'
+            . DIRECTORY_SEPARATOR . $receipt['storage_filename'];
+        if (!is_file($path) || !is_readable($path)) {
+            send_json(404, ['error' => 'The stored processing fee receipt is unavailable.']);
+        }
+        header('Content-Type: ' . $receipt['mime_type']);
+        header('Content-Length: ' . (string)filesize($path));
+        header('Content-Disposition: inline; filename="processing-fee-receipt"; filename*=UTF-8\'\'' . rawurlencode($receipt['original_filename']));
+        header('Cache-Control: private, no-store');
+        readfile($path);
+        exit;
+    }
+
+    if ($action === 'student_registration_request_document_file') {
+        request_method('GET');
+        $viewer = require_user();
         $documentId = filter_var($_GET['document_id'] ?? null, FILTER_VALIDATE_INT);
         if (!$documentId) {
             send_json(422, ['error' => 'A valid registration document is required.']);
         }
         $document = $pdo->prepare(
-            'SELECT d.original_filename, d.storage_filename
+            'SELECT d.original_filename, d.storage_filename, r.created_user_id, r.request_status
              FROM student_registration_request_documents d
+             JOIN student_registration_requests r ON r.request_id = d.request_id
              WHERE d.document_id = :document_id'
         );
         $document->execute(['document_id' => $documentId]);
         $file = $document->fetch();
         if (!$file) {
             send_json(404, ['error' => 'That registration document was not found.']);
+        }
+        if ($viewer['role'] !== 'registrar'
+            && !($viewer['role'] === 'student'
+                && $file['request_status'] === 'approved'
+                && (int)$file['created_user_id'] === (int)$viewer['user_id'])) {
+            send_json(403, ['error' => 'You cannot view this registration document.']);
         }
         $path = private_registration_storage_directory()
             . DIRECTORY_SEPARATOR . 'registration-documents'
@@ -1500,8 +2059,8 @@ try {
 
                 $offeringQuery = $pdo->prepare(
                     'SELECT pc.course_id, c.course_code, c.course_title, c.units,
-                            pc.recommended_year, sections.section_letter,
-                            CONCAT(p.program_code, \'-\', pc.recommended_year, \'-\', sections.section_letter) AS section_code,
+                            pc.recommended_year, RIGHT(co.section_code, 1) AS section_letter,
+                            co.section_code,
                             co.offering_id, co.course_number, co.offering_status,
                             co.instructor_name,
                             (SELECT COUNT(*) FROM enrollments e
@@ -1512,12 +2071,11 @@ try {
                          WHEN (SELECT term_name FROM academic_terms WHERE term_id = :term_for_semester) = \'1st semester\' THEN 1 ELSE 2 END
                        AND pc.is_required = 1
                      JOIN courses c ON c.course_id = pc.course_id AND c.course_status = \'active\'
-                     CROSS JOIN (SELECT \'A\' AS section_letter UNION ALL SELECT \'B\' UNION ALL SELECT \'C\') sections
-                     LEFT JOIN course_offerings co ON co.course_id = c.course_id
+                     JOIN course_offerings co ON co.course_id = c.course_id
                        AND co.term_id = :term_for_offering
-                       AND co.section_code = CONCAT(p.program_code, \'-\', pc.recommended_year, \'-\', sections.section_letter)
+                       AND co.section_code LIKE CONCAT(p.program_code, \'-\', pc.recommended_year, \'-%\')
                      WHERE p.program_id = :program_id
-                     ORDER BY pc.recommended_year, c.course_code, sections.section_letter'
+                     ORDER BY pc.recommended_year, c.course_code, co.section_code'
                 );
                 $offeringQuery->execute([
                     'term_for_semester' => $termId,
@@ -1733,8 +2291,8 @@ try {
                 $termId = filter_var($body['term_id'] ?? null, FILTER_VALIDATE_INT);
                 $programId = trim((string)($body['program_id'] ?? ''));
                 $section = strtoupper(trim((string)($body['section_code'] ?? '')));
-                if (!$studentUserId || !$termId || $programId === '' || !in_array($section, ['A', 'B', 'C'], true)) {
-                    send_json(422, ['error' => 'Choose an active student, semester, and section A, B, or C.']);
+                if (!$studentUserId || !$termId || $programId === '' || !in_array($section, ['A', 'B', 'C', 'D', 'E'], true)) {
+                    send_json(422, ['error' => 'Choose an active student, semester, and section A through E.']);
                 }
 
                 $studentQuery = $pdo->prepare(
@@ -1758,6 +2316,16 @@ try {
                     send_json(422, ['error' => 'The student does not belong to the selected program.']);
                 }
 
+                $sectionCode = $student['program_code'] . '-' . $student['year_level'] . '-' . $section;
+                $availableSection = $pdo->prepare(
+                    'SELECT 1 FROM course_offerings
+                     WHERE term_id = :term_id AND section_code = :section_code LIMIT 1'
+                );
+                $availableSection->execute(['term_id' => $termId, 'section_code' => $sectionCode]);
+                if (!$availableSection->fetchColumn()) {
+                    send_json(422, ['error' => 'That section is not configured for the student\'s program and year.']);
+                }
+
                 $enrolled = $pdo->prepare(
                     'SELECT 1 FROM enrollments e
                      JOIN course_offerings co ON co.offering_id = e.offering_id
@@ -1768,7 +2336,7 @@ try {
                 $enrolled->execute([
                     'student_user_id' => $studentUserId,
                     'term_id' => $termId,
-                    'section_code' => $student['program_code'] . '-' . $student['year_level'] . '-' . $section,
+                    'section_code' => $sectionCode,
                 ]);
                 if ($enrolled->fetchColumn()) {
                     send_json(409, ['error' => 'This student already has an enrollment in a different section for the selected semester. Update the enrollment records before changing their section.']);

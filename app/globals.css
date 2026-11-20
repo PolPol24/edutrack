@@ -3,4 +3,28 @@
 @tailwind utilities;
 :root { --bg:#f5f7fb; --surface:#ffffff; --border:#eef2f7; --text:#111827; --muted:#6b7280; --primary:#2563EB; --primary-light:#eff6ff; }
 body { background:var(--bg); color:var(--text); font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-@media print { aside, nav, button { display:none !important; } main { margin:0 !important; padding:0 !important; } body { background:#fff !important; } }
+.print-application { display:none; }
+@media print {
+  @page { size: A4 portrait; margin: 5mm; }
+  html, body { width:210mm !important; min-height:0 !important; margin:0 !important; background:#fff !important; }
+  body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .student-application-profile { display:block !important; width:200mm !important; min-height:0 !important; margin:0 !important; background:#fff !important; }
+  .student-application-profile aside, .student-application-profile nav, .student-application-profile .screen-main { display:none !important; }
+  .student-application-profile .print-application { display:block !important; width:198mm !important; height:285mm !important; margin:0 !important; padding:0 !important; }
+  .application-print-page { box-sizing:border-box; width:198mm; height:285mm; overflow:hidden; padding:1mm; background:#fff; color:#111; font-family:Arial, sans-serif; font-size:6.5pt; line-height:1.08; }
+  .application-print-header { display:grid; grid-template-columns:1fr 50.8mm; gap:3mm; height:52mm; align-items:start; }
+  .application-print-header h1 { margin:2mm 0 1mm; font-size:13pt; line-height:1.1; font-weight:700; }
+  .application-print-header p { margin:1mm 0; font-size:7pt; }
+  .application-print-brand { font-weight:700; letter-spacing:1.3pt; color:#1d4ed8; }
+  .application-print-photo { width:50.8mm; height:50.8mm; object-fit:cover; border:.3mm solid #111; }
+  .application-print-bar { margin:1.5mm 0 .7mm; padding:1mm 2mm; background:#111; color:#fff; font-size:7.2pt; line-height:1.1; font-weight:700; text-transform:uppercase; }
+  .application-print-grid { display:grid; gap:0; }
+  .application-print-grid-2 { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .application-print-grid-3 { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .application-print-span-3 { grid-column:span 3; }
+  .application-print-span-2 { grid-column:span 2; }
+  .application-print-cell { box-sizing:border-box; min-height:6mm; border:.2mm solid #333; padding:.7mm 1.2mm; overflow:hidden; }
+  .application-print-label { display:block; margin-bottom:.3mm; color:#333; font-size:5.2pt; }
+  .application-print-value { display:block; overflow-wrap:anywhere; font-size:6.3pt; font-weight:500; }
+
+}

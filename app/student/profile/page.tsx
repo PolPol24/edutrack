@@ -1,5 +1,5 @@
-import AccountProfile from "@/components/AccountProfile";
+import StudentApplicationProfile from "@/components/StudentApplicationProfile";
 
 export default function Page() {
-  return <AccountProfile role="student" />;
+  return <StudentApplicationProfile />;
 }

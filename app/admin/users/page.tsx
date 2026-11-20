@@ -5,14 +5,47 @@ import { Plus, Search, UserRound, X } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import ActionConfirmation from "@/components/ActionConfirmation";
 import { apiRequest } from "@/lib/api";
+import {
+  AccountListObserver,
+  RoleSummaryObserver,
+  userDirectory,
+  type DirectoryAccount,
+  type RoleCounts,
+  type UserRole,
+} from "@/lib/user-directory-observer";
 
-type Role = "student" | "registrar" | "admin";
-type Account = { user_id: number; account_number: string; full_name: string; email: string; role: Role; account_status: "active" | "suspended" };
+type Role = UserRole;
+type Account = DirectoryAccount;
 type UserAction = { kind: "create" } | { kind: "status"; user: Account; status: "active" | "suspended" } | null;
 const labels: Record<Role, string> = { student: "Student", registrar: "Registrar", admin: "Admin" };
 
+function useAccountList() {
+  const [accounts, setAccounts] = useState<readonly Account[]>([]);
+
+  useEffect(() => {
+    const observer = new AccountListObserver(setAccounts);
+    userDirectory.attach(observer);
+    return () => userDirectory.detach(observer);
+  }, []);
+
+  return accounts;
+}
+
+function useRoleSummary() {
+  const [counts, setCounts] = useState<RoleCounts>({ student: 0, registrar: 0, admin: 0 });
+
+  useEffect(() => {
+    const observer = new RoleSummaryObserver(setCounts);
+    userDirectory.attach(observer);
+    return () => userDirectory.detach(observer);
+  }, []);
+
+  return counts;
+}
+
 export default function Page() {
-  const [users, setUsers] = useState<Account[]>([]);
+  const users = useAccountList();
+  const roleCounts = useRoleSummary();
   const [query, setQuery] = useState("");
   const [role, setRole] = useState("All roles");
   const [showForm, setShowForm] = useState(false);
@@ -28,7 +61,7 @@ export default function Page() {
   const visible = useMemo(() => users.filter((user) => `${user.full_name} ${user.email} ${user.account_number}`.toLowerCase().includes(query.toLowerCase()) && (role === "All roles" || labels[user.role] === role)), [users, query, role]);
   async function load() {
     setBusy(true); setError("");
-    try { const result = await apiRequest<{ users: Account[] }>("admin_users"); setUsers(result.users); }
+    try { const result = await apiRequest<{ users: Account[] }>("admin_users"); userDirectory.replace(result.users); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to load user accounts."); }
     finally { setBusy(false); }
   }
@@ -54,7 +87,7 @@ export default function Page() {
     } catch (cause) { setActionError(cause instanceof Error ? cause.message : "Unable to update the account."); }
     finally { setBusy(false); }
   }
-  const counts = (Object.keys(labels) as Role[]).map((item) => ({ role: item, count: users.filter((user) => user.role === item).length }));
+  const counts = (Object.keys(labels) as Role[]).map((item) => ({ role: item, count: roleCounts[item] }));
   return <div className="flex min-h-screen bg-[#f8fafc]"><Sidebar role="admin"/><ActionConfirmation open={action !== null} title={action?.kind === "create" ? "Create this account?" : action?.status === "suspended" ? "Suspend this account?" : "Reactivate this account?"} description={action?.kind === "create" ? `Create ${name || "this user"} with the ${labels[newRole]} role and save it in edutrack_db?` : action ? `${action.user.full_name} (${labels[action.user.role]}) will be ${action.status}.` : "Confirm this account change."} confirmLabel={action?.kind === "create" ? "Create account" : action?.status === "suspended" ? "Suspend account" : "Reactivate account"} danger={action?.kind === "status" && action.status === "suspended"} busy={busy} error={actionError} onCancel={() => { setAction(null); setActionError(""); }} onConfirm={() => action?.kind === "create" ? addUser() : action?.kind === "status" ? toggleStatus(action.user) : undefined}/><main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8"><div className="mx-auto max-w-6xl">
     <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm font-medium text-blue-600">Access administration</p><h1 className="mt-1 text-2xl font-bold">Users</h1><p className="mt-1 text-sm text-slate-500">Manage student, registrar, and admin accounts in the database.</p></div><button onClick={() => { setShowForm(true); setMessage(""); }} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"><Plus size={16}/>Add user</button></div>
     {message && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</p>}{error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p>}

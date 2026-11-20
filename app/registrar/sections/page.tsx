@@ -8,12 +8,12 @@ import { apiRequest } from "@/lib/api";
 
 type Program = { program_id: string; program_code: string; program_name: string };
 type Term = { term_id: number; term_name: string; term_status: "active" | "upcoming"; year_label: string };
-type SectionLetter = "A" | "B" | "C";
+type SectionLetter = "A" | "B" | "C" | "D" | "E";
 type RosterStudent = { user_id: number; student_number: string; first_name: string; last_name: string; name_suffix: string | null; student_email: string; year_level: number; section_code: SectionLetter | null };
-type SectionOffering = { course_id: string; course_code: string; course_title: string; units: number | string; recommended_year: number; section_letter: "A" | "B" | "C"; section_code: string; offering_id: number | null; course_number: string | null; offering_status: string | null; instructor_name: string | null; enrolled_count: number | string };
+type SectionOffering = { course_id: string; course_code: string; course_title: string; units: number | string; recommended_year: number; section_letter: SectionLetter; section_code: string; offering_id: number | null; course_number: string | null; offering_status: string | null; instructor_name: string | null; enrolled_count: number | string };
 type SectionsData = { programs: Program[]; terms: Term[]; roster: RosterStudent[]; offerings: SectionOffering[] };
 
-const letters = ["A", "B", "C"] as const;
+const letters = ["A", "B", "C", "D", "E"] as const;
 
 function instructorNameMap(offerings: SectionOffering[]) {
   const names: Record<number, string> = {};
@@ -246,7 +246,7 @@ export default function Page() {
   }
 
   return <div className="flex min-h-screen bg-[#f8fafc]"><Sidebar role="registrar"/><ActionConfirmation open={confirmPrepare} title={ready ? "Refresh these sections?" : "Form these sections?"} description={`${ready ? "This will refresh" : "This will create"} sections A, B, and C for ${program?.program_code ?? "the selected program"} in ${term?.term_name === "1st semester" ? "1st Semester" : "2nd Semester"}. It will assign students to sections and create or update course offerings and course numbers.`} confirmLabel={ready ? "Refresh sections" : "Form sections"} busy={preparing} error={formError} onCancel={() => { setConfirmPrepare(false); setFormError(""); setExpandedSections(new Set()); }} onConfirm={prepare}/><main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8"><div className="mx-auto max-w-6xl">
-    <div className="mb-7"><p className="text-sm font-medium text-amber-700">Registrar academic setup</p><h1 className="mt-1 text-2xl font-bold">Program sections and course assignments</h1><p className="mt-1 max-w-3xl text-sm text-slate-500">Assign registered students to sections A, B, or C for the selected semester. Every subject section receives a unique course number. Instructor names are kept as references only; no instructor account or portal is created.</p></div>
+    <div className="mb-7"><p className="text-sm font-medium text-amber-700">Registrar academic setup</p><h1 className="mt-1 text-2xl font-bold">Program sections and course assignments</h1><p className="mt-1 max-w-3xl text-sm text-slate-500">Assign registered students to sections A through E for the selected semester. Every subject section receives a unique course number. Instructor names are kept as references only; no instructor account or portal is created.</p></div>
     {message && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</p>}{error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p>}
       <section className="rounded-2xl border bg-white p-5 sm:p-6">
         <div className="grid gap-4 sm:grid-cols-2">

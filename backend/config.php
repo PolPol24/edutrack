@@ -102,7 +102,7 @@ function require_user(?string $role = null): array
     }
 
     $statement = database()->prepare(
-        'SELECT full_name, email, role, account_status
+        'SELECT full_name, email, role, account_status, must_change_password
          FROM users
          WHERE user_id = :user_id
          LIMIT 1'
@@ -116,11 +116,18 @@ function require_user(?string $role = null): array
         send_json(401, ['error' => 'This account is unavailable. Please sign in with an active account.']);
     }
 
+    $action = (string)($_GET['action'] ?? '');
+    if ((bool)$currentUser['must_change_password']
+        && !in_array($action, ['me', 'change_password', 'logout'], true)) {
+        send_json(403, ['error' => 'You must change your temporary password before continuing.', 'must_change_password' => true]);
+    }
+
     $user = [
         'user_id' => (int)$user['user_id'],
         'full_name' => $currentUser['full_name'],
         'email' => $currentUser['email'],
         'role' => $currentUser['role'],
+        'must_change_password' => (bool)$currentUser['must_change_password'],
     ];
     $_SESSION['edutrack_user'] = $user;
 

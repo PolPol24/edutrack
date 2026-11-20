@@ -9,6 +9,12 @@ return [
     'compreface_url' => 'http://127.0.0.1:8000',
     // Create a Recognition service in the local CompreFace UI and keep its key private.
     'compreface_api_key' => 'replace-with-local-compreface-service-api-key',
+    // Google Workspace SMTP. Store the account's Google App Password here locally,
+    // or set EDUTRACK_SMTP_USERNAME and EDUTRACK_SMTP_PASSWORD in the PHP environment.
+    'smtp_username' => 'paulandrew.samson@cvsu.edu.ph',
+    'smtp_password' => '',
+    'mail_from' => 'paulandrew.samson@cvsu.edu.ph',
+    'mail_from_name' => 'EduTrack Registrar',
     'allowed_origins' => [
         'http://localhost:3000',
         'http://127.0.0.1:3000',

@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS users (
   user_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   full_name VARCHAR(160) NOT NULL,
   email VARCHAR(254) NOT NULL,
+  personal_email VARCHAR(254) NULL,
   password_hash VARCHAR(255) NOT NULL,
   phone VARCHAR(40) NULL,
   address VARCHAR(255) NULL,
@@ -91,6 +92,7 @@ CREATE TABLE IF NOT EXISTS users (
   hire_date DATE NULL,
   role ENUM('student', 'registrar', 'admin') NOT NULL,
   account_status ENUM('active', 'suspended') NOT NULL DEFAULT 'active',
+  must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
   email_verified_at DATETIME NULL,
   last_login_at DATETIME NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -111,9 +113,15 @@ CREATE TABLE IF NOT EXISTS users (
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS student_number_sequences (
+  school_year CHAR(4) NOT NULL,
+  last_number INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (school_year)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS student_registration_requests (
   request_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  student_number VARCHAR(30) NOT NULL,
+  student_number VARCHAR(30) NULL,
   first_name VARCHAR(80) NOT NULL,
   last_name VARCHAR(80) NOT NULL,
   name_suffix VARCHAR(20) NULL,
@@ -122,11 +130,13 @@ CREATE TABLE IF NOT EXISTS student_registration_requests (
   year_level TINYINT UNSIGNED NOT NULL,
   email VARCHAR(254) NOT NULL,
   phone VARCHAR(40) NULL,
+  application_details JSON NULL,
   password_hash VARCHAR(255) NULL,
   request_status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
   reviewed_by_user_id BIGINT UNSIGNED NULL,
   reviewed_at DATETIME NULL,
   created_user_id BIGINT UNSIGNED NULL,
+  processing_fee_receipt_required TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   pending_student_number VARCHAR(30) GENERATED ALWAYS AS (IF(request_status = 'pending', student_number, NULL)) STORED,
@@ -163,6 +173,34 @@ CREATE TABLE IF NOT EXISTS student_registration_request_documents (
   CONSTRAINT fk_registration_request_documents_request
     FOREIGN KEY (request_id) REFERENCES student_registration_requests (request_id)
     ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS student_registration_request_photos (
+  request_id BIGINT UNSIGNED NOT NULL,
+  original_filename VARCHAR(255) NOT NULL,
+  storage_filename VARCHAR(40) NOT NULL,
+  mime_type VARCHAR(30) NOT NULL,
+  size_bytes INT UNSIGNED NOT NULL,
+  uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (request_id),
+  UNIQUE KEY uq_registration_request_photo_storage (storage_filename),
+  CONSTRAINT fk_registration_request_photos_request
+    FOREIGN KEY (request_id) REFERENCES student_registration_requests (request_id)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS student_registration_request_processing_fee_receipts (
+  request_id BIGINT UNSIGNED NOT NULL,
+  original_filename VARCHAR(255) NOT NULL,
+  storage_filename VARCHAR(40) NOT NULL,
+  mime_type VARCHAR(30) NOT NULL,
+  size_bytes INT UNSIGNED NOT NULL,
+  uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (request_id),
+  UNIQUE KEY uq_registration_request_receipt_storage (storage_filename),
+  CONSTRAINT fk_registration_request_receipt_request
+    FOREIGN KEY (request_id) REFERENCES student_registration_requests (request_id)
+    ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS student_document_registration_requests (
@@ -308,7 +346,7 @@ CREATE TABLE IF NOT EXISTS student_section_assignments (
   assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (student_user_id, term_id),
   KEY ix_student_section_term (term_id, section_code),
-  CONSTRAINT chk_student_section_code CHECK (section_code IN ('A', 'B', 'C')),
+  CONSTRAINT chk_student_section_code CHECK (section_code IN ('A', 'B', 'C', 'D', 'E')),
   CONSTRAINT fk_student_section_student FOREIGN KEY (student_user_id) REFERENCES users (user_id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_student_section_term FOREIGN KEY (term_id) REFERENCES academic_terms (term_id)
