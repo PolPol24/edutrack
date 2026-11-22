@@ -24,7 +24,7 @@ export class ApiClient {
   }
 
   async request<T>(action: string, options: ApiOptions = {}, query: Query = {}): Promise<T> {
-    const response = await this.transport.send(this.url(action, query), {
+    const response = await this.send(this.url(action, query), {
       ...options,
       credentials: "include",
       headers: {
@@ -49,7 +49,7 @@ export class ApiClient {
   }
 
   async download(action: string, query: Query = {}): Promise<Blob> {
-    const response = await this.transport.send(this.url(action, query), { credentials: "include" });
+    const response = await this.send(this.url(action, query), { credentials: "include" });
     if (!response.ok) {
       const payload: unknown = await response.json().catch(() => null);
       throw this.responseError(payload, response.status);
@@ -62,5 +62,18 @@ export class ApiClient {
       ? payload.error
       : `EduTrack API request failed (${status}).`;
     return new ApiError(message, status);
+  }
+
+  private async send(url: string, options: RequestInit): Promise<Response> {
+    try {
+      return await this.transport.send(url, options);
+    } catch (cause) {
+      if (cause instanceof Error && cause.name === "AbortError") throw cause;
+      const apiOrigin = new URL(this.baseUrl).origin;
+      throw new ApiError(
+        `Cannot reach the EduTrack API at ${apiOrigin}. Check that XAMPP Apache is running and the API URL is correct. If the API is running, allow this frontend origin in local_config.php.`,
+        0,
+      );
+    }
   }
 }

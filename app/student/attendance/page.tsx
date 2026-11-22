@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { CircleCheck, History, ShieldCheck } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
+import AttendanceAnalytics from "@/components/AttendanceAnalytics";
 import FaceEnrollmentCapture, { FaceCapture } from "@/components/FaceEnrollmentCapture";
 import { getStudentAttendance, revokeStudentFace, saveStudentFace, type AttendanceRecord, type FaceEnrollment } from "@/lib/student-attendance-service";
 
@@ -37,6 +38,7 @@ export default function StudentAttendancePage() {
 
   return <div className="flex min-h-screen bg-[#f8fafc]"><Sidebar role="student"/><main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8"><div className="mx-auto max-w-6xl">
     <div className="mb-7"><p className="text-sm font-medium text-blue-600">Student services</p><h1 className="mt-1 text-2xl font-bold">Face attendance</h1><p className="mt-1 text-sm text-slate-500">Enroll your face once, then check in at the classroom kiosk.</p></div>
+    <AttendanceAnalytics records={records} />
     <div className="grid gap-6 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
       <section className="rounded-2xl border bg-white p-5 shadow-sm sm:p-7"><div className="flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><ShieldCheck/></div><div><h2 className="font-semibold">Face enrollment</h2><p className="text-sm text-slate-500">Local CompreFace enrollment status</p></div></div>
         {enrollment?.template_status === "active" ? <div className="mt-5 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800"><p className="flex items-center gap-2 font-semibold"><CircleCheck size={18}/>Face enrollment is active</p><p className="mt-2">Registered {enrollment.created_at.slice(0, 10)} · {enrollment.model_version}</p><button type="button" disabled={busy} onClick={()=>void revokeFace()} className="mt-3 rounded-lg border border-emerald-300 px-3 py-2 text-xs font-semibold disabled:opacity-50">Revoke face enrollment</button></div> : <>

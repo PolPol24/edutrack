@@ -3280,26 +3280,51 @@ try {
 
     if ($action === 'registrar_attendance') {
         $registrar = require_user('registrar');
-        finalize_expired_attendance($pdo);
         if ($method === 'GET') {
+            finalize_expired_attendance($pdo);
             $dateFrom = trim((string)($_GET['date_from'] ?? ''));
             $dateTo = trim((string)($_GET['date_to'] ?? ''));
             $courseCode = trim((string)($_GET['course_code'] ?? ''));
             $section = trim((string)($_GET['section_code'] ?? ''));
             $yearLabel = trim((string)($_GET['year_label'] ?? ''));
-            $where = ['1 = 1']; $params = [];
-            if ($dateFrom !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom)) { $where[] = 's.session_date >= :date_from'; $params['date_from'] = $dateFrom; }
-            if ($dateTo !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateTo)) { $where[] = 's.session_date <= :date_to'; $params['date_to'] = $dateTo; }
-            if ($courseCode !== '') { $where[] = 'c.course_code = :course_code'; $params['course_code'] = $courseCode; }
-            if ($section !== '') { $where[] = 'co.section_code = :section'; $params['section'] = $section; }
-            if ($yearLabel !== '') { $where[] = 'ay.year_label = :year_label'; $params['year_label'] = $yearLabel; }
+            $isValidDate = static function (string $value): bool {
+                $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value, new DateTimeZone('Asia/Manila'));
+                $issues = DateTimeImmutable::getLastErrors();
+                return $date !== false && $date->format('Y-m-d') === $value
+                    && ($issues === false || ($issues['warning_count'] === 0 && $issues['error_count'] === 0));
+            };
+            if (($dateFrom !== '' && !$isValidDate($dateFrom)) || ($dateTo !== '' && !$isValidDate($dateTo))) {
+                send_json(422, ['error' => 'Attendance dates must be valid calendar dates.']);
+            }
+            if ($dateFrom !== '' && $dateTo !== '' && $dateFrom > $dateTo) {
+                send_json(422, ['error' => 'The From date must be on or before the To date.']);
+            }
+            $filterConditions = [];
+            if ($dateFrom !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom)) { $filterConditions['date_from'] = ['s.session_date >= :date_from', 'date_from', $dateFrom]; }
+            if ($dateTo !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateTo)) { $filterConditions['date_to'] = ['s.session_date <= :date_to', 'date_to', $dateTo]; }
+            if ($courseCode !== '') { $filterConditions['course_code'] = ['c.course_code = :course_code', 'course_code', $courseCode]; }
+            if ($section !== '') { $filterConditions['section_code'] = ['co.section_code = :section', 'section', $section]; }
+            if ($yearLabel !== '') { $filterConditions['year_label'] = ['ay.year_label = :year_label', 'year_label', $yearLabel]; }
+            $buildWhere = static function (string|array|null $omit = null, bool $includeDates = true) use ($filterConditions): array {
+                $clauses = ['1 = 1'];
+                $params = [];
+                foreach ($filterConditions as $key => [$sql, $parameter, $value]) {
+                    if ($key === $omit || (is_array($omit) && in_array($key, $omit, true))) continue;
+                    if (!$includeDates && in_array($key, ['date_from', 'date_to'], true)) continue;
+                    $clauses[] = $sql;
+                    if ($parameter !== null) $params[$parameter] = $value;
+                }
+                return [implode(' AND ', $clauses), $params];
+            };
+            [$where, $params] = $buildWhere();
             $sql = 'SELECT ar.attendance_id, s.session_date, c.course_code, c.course_title, co.section_code, cm.room,
                            u.student_number, u.full_name, ar.attendance_status, ar.verification_method, ar.checked_in_at, ay.year_label
                     FROM attendance_records ar JOIN attendance_sessions s ON s.session_id = ar.session_id
                     JOIN class_meetings cm ON cm.meeting_id = s.meeting_id
                     JOIN course_offerings co ON co.offering_id = cm.offering_id JOIN courses c ON c.course_id = co.course_id
                     JOIN academic_terms t ON t.term_id = co.term_id JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
-                    JOIN users u ON u.user_id = ar.student_user_id WHERE ' . implode(' AND ', $where) . ' ORDER BY s.session_date DESC, c.course_code, co.section_code, u.full_name LIMIT 2000';
+                    JOIN users u ON u.user_id = ar.student_user_id
+                    WHERE ' . $where . ' ORDER BY s.session_date DESC, c.course_code, co.section_code, u.full_name LIMIT 2000';
             $records = $pdo->prepare($sql); $records->execute($params);
             $summarySql = 'SELECT s.session_id, s.session_date, c.course_code, c.course_title, co.section_code, cm.room,
                                   COUNT(DISTINCT e.student_user_id) AS total_enrolled,
@@ -3312,14 +3337,18 @@ try {
                            JOIN academic_terms t ON t.term_id = co.term_id JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
                            JOIN enrollments e ON e.offering_id = co.offering_id AND e.enrollment_status = \'approved\'
                            LEFT JOIN attendance_records ar ON ar.session_id = s.session_id AND ar.student_user_id = e.student_user_id
-                           WHERE ' . implode(' AND ', $where) . '
+                           WHERE ' . $where . '
                            GROUP BY s.session_id, s.session_date, c.course_code, c.course_title, co.section_code, cm.room
                            ORDER BY s.session_date DESC, c.course_code, co.section_code';
             $summary = $pdo->prepare($summarySql); $summary->execute($params);
-            $courses = $pdo->query('SELECT DISTINCT c.course_code FROM courses c JOIN course_offerings co ON co.course_id = c.course_id JOIN attendance_sessions s ON s.meeting_id IN (SELECT meeting_id FROM class_meetings WHERE offering_id = co.offering_id) ORDER BY c.course_code')->fetchAll(PDO::FETCH_COLUMN);
-            $years = $pdo->query('SELECT DISTINCT ay.year_label FROM academic_years ay JOIN academic_terms t ON t.academic_year_id = ay.academic_year_id JOIN course_offerings co ON co.term_id = t.term_id JOIN class_meetings cm ON cm.offering_id = co.offering_id JOIN attendance_sessions s ON s.meeting_id = cm.meeting_id ORDER BY ay.year_label DESC')->fetchAll(PDO::FETCH_COLUMN);
-            $sections = $pdo->query('SELECT DISTINCT co.section_code FROM course_offerings co JOIN class_meetings cm ON cm.offering_id = co.offering_id JOIN attendance_sessions s ON s.meeting_id = cm.meeting_id ORDER BY co.section_code')->fetchAll(PDO::FETCH_COLUMN);
-            send_json(200, ['records' => $records->fetchAll(), 'summaries' => $summary->fetchAll(), 'course_codes' => $courses, 'year_labels' => $years, 'section_codes' => $sections]);
+            $courses = $pdo->query('SELECT course_code FROM courses ORDER BY course_code')->fetchAll(PDO::FETCH_COLUMN);
+            sort($courses, SORT_NATURAL | SORT_FLAG_CASE);
+            $sections = $pdo->query('SELECT DISTINCT section_code FROM course_offerings WHERE section_code IS NOT NULL ORDER BY section_code')->fetchAll(PDO::FETCH_COLUMN);
+            sort($sections, SORT_NATURAL | SORT_FLAG_CASE);
+            $offerings = $pdo->query('SELECT DISTINCT c.course_code, co.section_code FROM course_offerings co JOIN courses c ON c.course_id = co.course_id WHERE co.section_code IS NOT NULL ORDER BY c.course_code, co.section_code')->fetchAll();
+            $years = $pdo->query('SELECT year_label FROM academic_years ORDER BY year_label DESC')->fetchAll(PDO::FETCH_COLUMN);
+            sort($years, SORT_NATURAL | SORT_FLAG_CASE);
+            send_json(200, ['records' => $records->fetchAll(), 'summaries' => $summary->fetchAll(), 'course_codes' => $courses, 'year_labels' => $years, 'section_codes' => $sections, 'offerings' => $offerings]);
         }
         if ($method === 'PATCH') {
             $body = request_body();

@@ -26,7 +26,12 @@ $allowedOrigins = array_filter(array_map(
     explode(
         ',',
         getenv('EDUTRACK_ALLOWED_ORIGINS')
-            ?: implode(',', $localConfig['allowed_origins'] ?? ['http://localhost:3000', 'http://127.0.0.1:3000'])
+            ?: implode(',', $localConfig['allowed_origins'] ?? [
+                'http://localhost:3000',
+                'http://127.0.0.1:3000',
+                'http://localhost:3001',
+                'http://127.0.0.1:3001',
+            ])
     )
 ));
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
@@ -157,6 +162,16 @@ function request_method(string $expected): void
 function handle_api_error(Throwable $error): never
 {
     error_log($error->__toString());
+
+    if ($error instanceof RuntimeException
+        && str_starts_with($error->getMessage(), 'Configure a local CompreFace URL and service API key')) {
+        send_json(503, ['error' => 'Face enrollment is not configured. Start the local CompreFace service and add its Recognition service API key to XAMPP local_config.php.']);
+    }
+
+    if ($error instanceof RuntimeException
+        && str_starts_with($error->getMessage(), 'The local CompreFace service could not be reached:')) {
+        send_json(503, ['error' => 'The local face recognition service is unavailable. Start the CompreFace Docker stack and try again.']);
+    }
 
     if ($error instanceof PDOException && $error->getCode() === '23000') {
         send_json(409, ['error' => 'This record conflicts with an existing database record.']);
