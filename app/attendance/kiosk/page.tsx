@@ -49,9 +49,39 @@ export default function AttendanceKioskPage() {
   }, []);
   useEffect(() => {
     if (!pairing) return;
-    void poll(pairing).catch((cause)=>setError(cause instanceof Error?cause.message:"Kiosk connection failed."));
-    const timer=window.setInterval(()=>void poll(pairing).catch((cause)=>setError(cause instanceof Error?cause.message:"Kiosk connection failed.")),5000);
-    return()=>window.clearInterval(timer);
+    let cancelled = false;
+    let inFlight = false;
+    let timer: number | undefined;
+    const scheduleNext = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void run(), 5000);
+    };
+    const run = async () => {
+      if (cancelled || document.hidden || inFlight) return;
+      inFlight = true;
+      try {
+        await poll(pairing);
+      } catch (cause) {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : "Kiosk connection failed.");
+      } finally {
+        inFlight = false;
+        if (!cancelled && !document.hidden) scheduleNext();
+      }
+    };
+    const handleVisibility = () => {
+      if (document.hidden) {
+        if (timer !== undefined) window.clearTimeout(timer);
+      } else {
+        void run();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    void run();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   },[pairing,poll]);
 
   function savePairing(event: FormEvent<HTMLFormElement>) {
