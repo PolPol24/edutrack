@@ -9,7 +9,7 @@ function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null):
     $email = strtolower(trim((string)($body['email'] ?? '')));
     $role = $forcedRole ?? strtolower(trim((string)($body['role'] ?? '')));
     $password = (string)($body['password'] ?? 'password');
-    if ($name === '' || mb_strlen($name) > 160 || !filter_var($email, FILTER_VALIDATE_EMAIL)
+    if ($name === '' || mb_strlen($name) > 160 || !preg_match('/^[\p{L}\p{M}\s.\x27’\-]+$/u', $name) || !filter_var($email, FILTER_VALIDATE_EMAIL)
         || !in_array($role, ['student', 'registrar', 'admin'], true)
         || strlen($password) < 8) {
         send_json(422, ['error' => 'Provide a valid name, email, role, and password of at least 8 characters.']);
@@ -667,6 +667,25 @@ try {
                     send_json(422, ['error' => 'Complete all required personal, education, and character reference fields.']);
                 }
             }
+            // Validate by meaning on the server too; browser filters can be bypassed.
+            foreach (['middle_name', 'place_of_birth', 'citizenship', 'religion', 'father_name', 'father_occupation', 'mother_name', 'mother_occupation', 'language_dialect', 'emergency_contact_person', 'elementary_school', 'high_school', 'vocational', 'reference_1_name', 'reference_2_name', 'reference_3_name'] as $nameField) {
+                $value = (string)($applicationDetails[$nameField] ?? '');
+                if ($value !== '' && !preg_match('/^[\p{L}\p{M}\s.\x27’\-]+$/u', $value)) {
+                    send_json(422, ['error' => 'Names may contain letters, spaces, apostrophes, periods, and hyphens only.']);
+                }
+            }
+            foreach (['phone', 'emergency_contact_no', 'reference_1_contact', 'reference_2_contact', 'reference_3_contact'] as $phoneField) {
+                $value = $phoneField === 'phone' ? $phone : (string)($applicationDetails[$phoneField] ?? '');
+                if (!preg_match('/^[0-9+() .-]{7,40}$/', $value)) {
+                    send_json(422, ['error' => 'Enter a valid phone number using digits and common phone formatting only.']);
+                }
+            }
+            foreach (['height_cm', 'weight_kg'] as $numberField) {
+                $value = (string)($applicationDetails[$numberField] ?? '');
+                if ($value !== '' && !preg_match('/^\d{1,3}(?:\.\d)?$/', $value)) {
+                    send_json(422, ['error' => 'Height and weight must be numeric values.']);
+                }
+            }
             foreach (['elementary_year_graduated', 'high_school_year_graduated'] as $graduationYearField) {
                 if (!preg_match('/^\d{4}$/', (string)$applicationDetails[$graduationYearField])) {
                     send_json(422, ['error' => 'Enter a four-digit graduation year for elementary and high school.']);
@@ -681,7 +700,9 @@ try {
                 send_json(422, ['error' => 'Application details are too long.']);
             }
 
-            if ($firstName === '' || mb_strlen($firstName) > 80
+            if (!preg_match('/^[\p{L}\p{M}\s.\x27’\-]+$/u', $firstName)
+                || !preg_match('/^[\p{L}\p{M}\s.\x27’\-]+$/u', $lastName)
+                || $firstName === '' || mb_strlen($firstName) > 80
                 || $lastName === '' || mb_strlen($lastName) > 80
                 || mb_strlen((string)$applicationDetails['middle_name']) > 80
                 || mb_strlen(trim(implode(' ', [$firstName, $applicationDetails['middle_name'], $lastName, $suffix]))) > 160
@@ -1232,7 +1253,7 @@ try {
             $phone = trim((string)($body['phone'] ?? ''));
             $address = trim((string)($body['address'] ?? ''));
             $office = trim((string)($body['office'] ?? ''));
-            if (strlen($phone) > 40 || strlen($address) > 255 || strlen($office) > 160) {
+            if (($phone !== '' && !preg_match('/^[0-9+() .-]{7,40}$/', $phone)) || strlen($address) > 255 || strlen($office) > 160) {
                 send_json(422, ['error' => 'Check the contact field lengths.']);
             }
             $update = $pdo->prepare(
@@ -2946,7 +2967,7 @@ try {
                 $room = trim((string)($body['room'] ?? ''));
                 if (!$offeringId || !in_array($day, ['monday','tuesday','wednesday','thursday','friday','saturday'], true)
                     || !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $start) || !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $end)
-                    || $end <= $start || $room === '' || mb_strlen($room) > 100) {
+                    || $end <= $start || $room === '' || mb_strlen($room) > 100 || !preg_match('/^[\p{L}\p{N}\s-]+$/u', $room)) {
                     send_json(422, ['error' => 'Choose an active course offering, a valid day and time range, and a classroom.']);
                 }
                 $exists = $pdo->prepare('SELECT 1 FROM course_offerings WHERE offering_id = :id AND offering_status <> \'cancelled\'');
@@ -2993,7 +3014,8 @@ try {
             if ($type === 'kiosk') {
                 $name = trim((string)($body['kiosk_name'] ?? ''));
                 $room = trim((string)($body['room'] ?? ''));
-                if ($name === '' || mb_strlen($name) > 120 || $room === '' || mb_strlen($room) > 100) send_json(422, ['error' => 'Provide a kiosk name and classroom.']);
+                if ($name === '' || mb_strlen($name) > 120 || !preg_match('/^[\p{L}\p{N}\s-]+$/u', $name)
+                    || $room === '' || mb_strlen($room) > 100 || !preg_match('/^[\p{L}\p{N}\s-]+$/u', $room)) send_json(422, ['error' => 'Use letters, numbers, spaces, or hyphens for the kiosk name and classroom.']);
                 $scheduledRoom = $pdo->prepare('SELECT 1 FROM class_meetings WHERE room = :room LIMIT 1');
                 $scheduledRoom->execute(['room' => $room]);
                 if (!$scheduledRoom->fetchColumn()) send_json(422, ['error' => 'Schedule at least one class in this classroom before registering its kiosk.']);
@@ -3029,7 +3051,7 @@ try {
                 $start = (string)($body['start_time'] ?? ''); $end = (string)($body['end_time'] ?? ''); $room = trim((string)($body['room'] ?? ''));
                 if (!$offeringId || !in_array($day, ['monday','tuesday','wednesday','thursday','friday','saturday'], true)
                     || !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $start) || !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $end)
-                    || $end <= $start || $room === '' || mb_strlen($room) > 100) send_json(422, ['error' => 'Choose a valid course, day, time range, and classroom.']);
+                    || $end <= $start || $room === '' || mb_strlen($room) > 100 || !preg_match('/^[\p{L}\p{N}\s-]+$/u', $room)) send_json(422, ['error' => 'Choose a valid course, day, time range, and classroom.']);
                 $overlap = $pdo->prepare('SELECT 1 FROM class_meetings WHERE meeting_id <> :meeting_id AND room = :room AND day_of_week = :day AND start_time < :end_time AND end_time > :start_time LIMIT 1');
                 $overlap->execute(['meeting_id' => $meetingId, 'room' => $room, 'day' => $day, 'end_time' => $end, 'start_time' => $start]);
                 if ($overlap->fetchColumn()) send_json(409, ['error' => 'That room already has a class scheduled during this time.']);
