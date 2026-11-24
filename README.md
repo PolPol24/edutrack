@@ -62,6 +62,7 @@ XAMPP provides Apache, PHP, MySQL, and phpMyAdmin for local development.
    to set the maximum section offering capacity to 10. Apply
    [`database/migrations/20261126_student_records_and_course_eligibility.sql`](./database/migrations/20261126_student_records_and_course_eligibility.sql)
    to separate student login accounts from registrar academic records and add prerequisite/result history. Until an official prerequisite checklist is loaded, the system uses earlier required curriculum courses as a temporary prerequisite rule.
+   Apply [`database/migrations/20261127_seed_three_academic_years.sql`](./database/migrations/20261127_seed_three_academic_years.sql) to add the next three academic years and their first and second semesters.
    These migrations do not reset existing
    records. The consolidated schema stores login credentials and student/employee
    attributes directly in `users`. Instructor names on course offerings remain

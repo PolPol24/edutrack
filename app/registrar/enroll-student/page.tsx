@@ -89,6 +89,7 @@ export default function Page() {
       .then((result) => {
         setStudents(result.students);
         setTerms(result.terms);
+        setTermId((current) => current || String(result.terms.find((term) => term.term_status === "active")?.term_id ?? result.terms[0]?.term_id ?? ""));
       })
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Unable to load enrollment options."))
       .finally(() => setLoadingOptions(false));

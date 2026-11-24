@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LayoutDashboard, BookOpen, ClipboardList, User, LogOut, Users, GraduationCap, FileBarChart, Settings, Layers3, CalendarDays, ScanFace } from "lucide-react";
 import { apiRequest } from "@/lib/api";
+import { formatAcademicTerm, useAcademicContext } from "@/lib/use-academic-context";
 
 type NavItem = { label: string; href: string; icon: any };
 
@@ -46,6 +47,7 @@ export default function Sidebar({ role }: { role: Role }) {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
+  const academicTerm = useAcademicContext();
   const items = navByRole[role];
 
   async function handleLogout() {
@@ -94,6 +96,11 @@ export default function Sidebar({ role }: { role: Role }) {
           <p className="text-[11px] text-slate-500 uppercase tracking-widest">{role}</p>
         </div>
       </div>
+
+      {academicTerm && <div className="mb-4 rounded-xl bg-blue-50 px-3 py-2.5 text-xs">
+        <p className="font-medium text-blue-700">Current semester</p>
+        <p className="mt-1 font-semibold text-slate-700">{formatAcademicTerm(academicTerm)}</p>
+      </div>}
 
       <nav className="space-y-1 flex-1">
         {items.map(item => {

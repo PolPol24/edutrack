@@ -153,6 +153,7 @@ export default function Page() {
     const data = await apiRequest<SectionsData>("registrar_sections", {}, selectedProgram && selectedTerm ? { program_id: selectedProgram, term_id: selectedTerm } : {});
     setPrograms(data.programs);
     setTerms(data.terms);
+    if (!selectedTerm) setTermId(String(data.terms.find((term) => term.term_status === "active")?.term_id ?? data.terms[0]?.term_id ?? ""));
     setRoster(data.roster);
     setOfferings(data.offerings);
     setInstructorNames(instructorNameMap(data.offerings));

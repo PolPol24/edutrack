@@ -97,7 +97,7 @@ export default function StudentSchedulePage() {
         <div className="mx-auto max-w-7xl">
           <div className="mb-7">
             <p className="text-sm font-medium text-blue-600">
-              {schedule?.term ? `${schedule.term.term_name} · ${schedule.term.year_label}` : "Active academic term"}
+              {schedule?.term ? `${schedule.term.term_name} · ${schedule.term.year_label}` : "No current semester configured"}
             </p>
             <h1 className="mt-1 text-2xl font-bold">My Schedule</h1>
             <p className="mt-1 text-sm text-slate-500">

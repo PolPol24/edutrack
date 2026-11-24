@@ -11,6 +11,16 @@ function course_number_year_prefix(string $yearLabel): string
     return substr($parts[1], 2, 2) . substr($parts[2], 2, 2);
 }
 
+function is_demo_student_account(string $email): bool
+{
+    // These are the student accounts created by setup_demo.php.
+    return in_array(strtolower($email), [
+        'student@edutrack.edu',
+        'rance@edutrack.edu',
+        'pol.samsung@edutrack.edu',
+    ], true);
+}
+
 function next_course_number_sequence(PDO $pdo, int $termId): int
 {
     $statement = $pdo->prepare(
@@ -1175,6 +1185,20 @@ try {
         send_json(200, ['user' => require_user()]);
     }
 
+    if ($action === 'academic_context') {
+        request_method('GET');
+        require_user();
+        $term = $pdo->query(
+            'SELECT t.term_name, ay.year_label
+             FROM academic_terms t
+             JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
+             WHERE t.term_status = \'active\'
+             ORDER BY ay.is_current DESC, t.start_date DESC
+             LIMIT 1'
+        )->fetch();
+        send_json(200, ['term' => $term ?: null]);
+    }
+
     if ($action === 'student_application') {
         request_method('GET');
         $student = require_user('student');
@@ -1381,6 +1405,7 @@ try {
                 'term_name' => $term['term_name'] ?? null,
                 'year_label' => $term['year_label'] ?? null,
                 'has_submitted_documents' => (bool)$hasSubmittedDocuments->fetchColumn(),
+                'is_demo_account' => is_demo_student_account((string)$student['email']),
                 'request' => $request,
             ]);
         }
@@ -2058,23 +2083,36 @@ try {
     if ($action === 'admin_settings') {
         $admin = require_user('admin');
         $keys = [
-            'institution_name', 'academic_year_label', 'email_notifications',
+            'institution_name', 'academic_year_label', 'semester_label', 'email_notifications',
             'two_factor_required_for_admins', 'session_timeout_minutes', 'maintenance_mode',
         ];
         if ($method === 'GET') {
-            $statement = $pdo->prepare('SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN (\'institution_name\', \'academic_year_label\', \'email_notifications\', \'two_factor_required_for_admins\', \'session_timeout_minutes\', \'maintenance_mode\')');
+            $statement = $pdo->prepare('SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN (\'institution_name\', \'academic_year_label\', \'semester_label\', \'email_notifications\', \'two_factor_required_for_admins\', \'session_timeout_minutes\', \'maintenance_mode\')');
             $statement->execute();
             $settings = [];
             foreach ($statement->fetchAll() as $row) {
                 $settings[$row['setting_key']] = json_decode($row['setting_value'], true);
             }
             $settings['institution_name'] ??= 'EduTrack University';
-            $settings['academic_year_label'] ??= (string)$pdo->query('SELECT year_label FROM academic_years WHERE is_current = 1 LIMIT 1')->fetchColumn();
+            $currentAcademicYear = $pdo->query(
+                'SELECT year_label FROM academic_years WHERE is_current = 1 ORDER BY start_date DESC LIMIT 1'
+            )->fetchColumn();
+            if ($currentAcademicYear) {
+                $settings['academic_year_label'] = (string)$currentAcademicYear;
+            } else {
+                $settings['academic_year_label'] ??= '';
+            }
+            $activeTerm = $pdo->query(
+                'SELECT t.term_name FROM academic_terms t
+                 JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
+                 WHERE t.term_status = \'active\' ORDER BY ay.is_current DESC, t.start_date DESC LIMIT 1'
+            )->fetchColumn();
+            $settings['semester_label'] ??= $activeTerm ?: '1st semester';
             $settings['email_notifications'] ??= true;
             $settings['two_factor_required_for_admins'] ??= true;
             $settings['session_timeout_minutes'] ??= 30;
             $settings['maintenance_mode'] ??= false;
-            $academicYears = $pdo->query('SELECT year_label FROM academic_years ORDER BY start_date DESC')->fetchAll(PDO::FETCH_COLUMN);
+            $academicYears = $pdo->query('SELECT year_label FROM academic_years ORDER BY start_date ASC')->fetchAll(PDO::FETCH_COLUMN);
             if (!$academicYears && !empty($settings['academic_year_label'])) $academicYears[] = $settings['academic_year_label'];
             send_json(200, ['settings' => $settings, 'academic_years' => $academicYears]);
         }
@@ -2082,17 +2120,28 @@ try {
             $body = request_body();
             $institution = trim((string)($body['institution_name'] ?? ''));
             $yearLabel = trim((string)($body['academic_year_label'] ?? ''));
+            $semesterLabel = trim((string)($body['semester_label'] ?? ''));
             $timeout = filter_var($body['session_timeout_minutes'] ?? null, FILTER_VALIDATE_INT);
             if ($institution === '' || strlen($institution) > 160 || !preg_match('/^\d{4}-\d{4}$/', $yearLabel)
+                || !in_array($semesterLabel, ['1st semester', '2nd semester'], true)
                 || !in_array($timeout, [15, 30, 60, 0], true)) {
-                send_json(422, ['error' => 'Provide a valid institution name, academic year, and session timeout.']);
+                send_json(422, ['error' => 'Provide a valid institution name, academic year, semester, and session timeout.']);
             }
-            $yearExists = $pdo->prepare('SELECT 1 FROM academic_years WHERE year_label = :year_label LIMIT 1');
+            $yearExists = $pdo->prepare('SELECT academic_year_id FROM academic_years WHERE year_label = :year_label LIMIT 1');
             $yearExists->execute(['year_label' => $yearLabel]);
-            if (!$yearExists->fetchColumn()) send_json(422, ['error' => 'Choose an academic year already configured in the system.']);
+            $academicYearId = $yearExists->fetchColumn();
+            if (!$academicYearId) send_json(422, ['error' => 'Choose an academic year already configured in the system.']);
+            $selectedTermQuery = $pdo->prepare(
+                'SELECT term_id FROM academic_terms
+                 WHERE academic_year_id = :academic_year_id AND term_name = :term_name LIMIT 1'
+            );
+            $selectedTermQuery->execute(['academic_year_id' => $academicYearId, 'term_name' => $semesterLabel]);
+            $selectedTermId = $selectedTermQuery->fetchColumn();
+            if (!$selectedTermId) send_json(422, ['error' => 'The selected semester is not configured for this academic year.']);
             $settings = [
                 'institution_name' => $institution,
                 'academic_year_label' => $yearLabel,
+                'semester_label' => $semesterLabel,
                 'email_notifications' => (bool)($body['email_notifications'] ?? false),
                 'two_factor_required_for_admins' => (bool)($body['two_factor_required_for_admins'] ?? false),
                 'session_timeout_minutes' => $timeout,
@@ -2104,14 +2153,90 @@ try {
                  ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
                    updated_by_user_id = VALUES(updated_by_user_id)'
             );
-            foreach ($settings as $key => $value) {
-                $save->execute([
-                    'setting_key' => $key,
-                    'setting_value' => json_encode($value, JSON_THROW_ON_ERROR),
-                    'updated_by_user_id' => $admin['user_id'],
-                ]);
+            $progression = ['years_advanced' => 0, 'students_advanced' => 0, 'students_graduated' => 0];
+            $pdo->beginTransaction();
+            try {
+                $currentYearLabel = $pdo->query(
+                    'SELECT year_label FROM academic_years WHERE is_current = 1
+                     ORDER BY start_date DESC LIMIT 1 FOR UPDATE'
+                )->fetchColumn();
+                $markerQuery = $pdo->prepare(
+                    'SELECT setting_value FROM system_settings
+                     WHERE setting_key = \'student_progression_through_year\' FOR UPDATE'
+                );
+                $markerQuery->execute();
+                $progressionYearLabel = json_decode((string)$markerQuery->fetchColumn(), true);
+                if (!is_string($progressionYearLabel) || !preg_match('/^\d{4}-\d{4}$/', $progressionYearLabel)) {
+                    $progressionYearLabel = is_string($currentYearLabel) && preg_match('/^\d{4}-\d{4}$/', $currentYearLabel)
+                        ? $currentYearLabel
+                        : $yearLabel;
+                }
+                $progressionStartYear = max((int)substr($progressionYearLabel, 0, 4), (int)substr((string)$currentYearLabel, 0, 4));
+                $targetStartYear = (int)substr($yearLabel, 0, 4);
+                $yearsAdvanced = max(0, $targetStartYear - $progressionStartYear);
+                $progression['years_advanced'] = $yearsAdvanced;
+                if ($yearsAdvanced > 0) {
+                    $studentCounts = $pdo->prepare(
+                        'SELECT
+                           SUM(CASE WHEN year_level + :step_advanced <= 4 THEN 1 ELSE 0 END) AS students_advanced,
+                           SUM(CASE WHEN year_level + :step_graduated > 4 THEN 1 ELSE 0 END) AS students_graduated
+                         FROM student_records WHERE student_status = \'active\''
+                    );
+                    $studentCounts->execute([
+                        'step_advanced' => $yearsAdvanced,
+                        'step_graduated' => $yearsAdvanced,
+                    ]);
+                    $counts = $studentCounts->fetch() ?: [];
+                    $progression['students_advanced'] = (int)($counts['students_advanced'] ?? 0);
+                    $progression['students_graduated'] = (int)($counts['students_graduated'] ?? 0);
+
+                    $advanceStudents = $pdo->prepare(
+                        'UPDATE student_records
+                         SET student_status = CASE WHEN year_level + :step_for_status > 4 THEN \'graduated\' ELSE \'active\' END,
+                             year_level = LEAST(4, year_level + :step_for_level)
+                         WHERE student_status = \'active\''
+                    );
+                    $advanceStudents->execute([
+                        'step_for_status' => $yearsAdvanced,
+                        'step_for_level' => $yearsAdvanced,
+                    ]);
+                    $syncStudentAccounts = $pdo->prepare(
+                        'UPDATE users u JOIN student_records sr ON sr.user_id = u.user_id
+                         SET u.year_level = sr.year_level, u.student_status = sr.student_status
+                         WHERE u.role = \'student\''
+                    );
+                    $syncStudentAccounts->execute();
+                }
+                $pdo->exec('UPDATE academic_years SET is_current = 0');
+                $setCurrentYear = $pdo->prepare('UPDATE academic_years SET is_current = 1 WHERE academic_year_id = :academic_year_id');
+                $setCurrentYear->execute(['academic_year_id' => $academicYearId]);
+                $deactivateTerms = $pdo->prepare(
+                    'UPDATE academic_terms SET term_status = \'upcoming\'
+                     WHERE term_status = \'active\' AND term_id <> :term_id'
+                );
+                $deactivateTerms->execute(['term_id' => $selectedTermId]);
+                $activateTerm = $pdo->prepare('UPDATE academic_terms SET term_status = \'active\' WHERE term_id = :term_id');
+                $activateTerm->execute(['term_id' => $selectedTermId]);
+                foreach ($settings as $key => $value) {
+                    $save->execute([
+                        'setting_key' => $key,
+                        'setting_value' => json_encode($value, JSON_THROW_ON_ERROR),
+                        'updated_by_user_id' => $admin['user_id'],
+                    ]);
+                }
+                if ($targetStartYear > (int)substr($progressionYearLabel, 0, 4)) {
+                    $save->execute([
+                        'setting_key' => 'student_progression_through_year',
+                        'setting_value' => json_encode($yearLabel, JSON_THROW_ON_ERROR),
+                        'updated_by_user_id' => $admin['user_id'],
+                    ]);
+                }
+                $pdo->commit();
+            } catch (Throwable $cause) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                throw $cause;
             }
-            send_json(200, ['message' => 'System settings were saved.', 'settings' => $settings]);
+            send_json(200, ['message' => 'System settings were saved.', 'settings' => $settings, 'academic_progression' => $progression]);
         }
         request_method('GET');
     }
@@ -2255,7 +2380,7 @@ try {
                  FROM academic_terms t JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
                  WHERE t.term_status IN (\'active\', \'upcoming\')
                    AND t.term_name IN (\'1st semester\', \'2nd semester\')
-                 ORDER BY ay.start_date DESC, t.start_date'
+                 ORDER BY (t.term_status = \'active\') DESC, ay.start_date DESC, t.start_date'
             )->fetchAll();
             $programId = trim((string)($_GET['program_id'] ?? ''));
             $termId = filter_var($_GET['term_id'] ?? null, FILTER_VALIDATE_INT);
@@ -2685,7 +2810,7 @@ try {
                  JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
                  WHERE t.term_status IN (\'active\', \'upcoming\')
                    AND t.term_name IN (\'1st semester\', \'2nd semester\')
-                 ORDER BY ay.start_date DESC, t.start_date'
+                 ORDER BY (t.term_status = \'active\') DESC, ay.start_date DESC, t.start_date'
             )->fetchAll();
 
             $studentUserId = filter_var($_GET['student_user_id'] ?? null, FILTER_VALIDATE_INT);
@@ -2736,7 +2861,7 @@ try {
             $lockTerm = $pdo->prepare('SELECT term_id FROM academic_terms WHERE term_id = :term_id FOR UPDATE');
             $lockTerm->execute(['term_id' => $termId]);
             $studentQuery = $pdo->prepare(
-                'SELECT sp.user_id, sp.student_number, p.program_code, sp.year_level,
+                'SELECT sp.user_id, sp.student_number, sp.email, p.program_code, sp.year_level,
                         COALESCE(section_assignment.section_code, roster.section_code, \'A\') AS section_letter,
                         t.term_id, t.term_name, t.term_status, ay.year_label
                  FROM users sp
@@ -2813,7 +2938,7 @@ try {
             }
             $student['section_letter'] = $section;
 
-            if ((int)$student['year_level'] === 1) {
+            if ((int)$student['year_level'] === 1 && !is_demo_student_account((string)$student['email'])) {
                 $hasSubmittedDocuments = $pdo->prepare(
                     'SELECT EXISTS (
                        SELECT 1 FROM student_document_registration_requests
@@ -2998,7 +3123,7 @@ try {
                 $pdo->rollBack();
                 send_json(404, ['error' => 'Student account not found.']);
             }
-            if ((int)$yearLevel === 1) {
+            if ((int)$yearLevel === 1 && !is_demo_student_account((string)$user['email'])) {
                 $hasSubmittedDocuments = $pdo->prepare(
                     'SELECT EXISTS (
                        SELECT 1 FROM student_document_registration_requests

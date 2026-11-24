@@ -6,6 +6,7 @@ import { CheckCircle2, Clock3, Plus, X } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import ActionConfirmation from "@/components/ActionConfirmation";
 import { apiRequest } from "@/lib/api";
+import { useAcademicContext } from "@/lib/use-academic-context";
 
 type EnrollmentStatus = "pending" | "approved" | "rejected";
 type Enrollment = {
@@ -29,10 +30,11 @@ type CourseOffering = {
   eligibility_reason?: string;
   is_retake?: boolean | number;
 };
-type RegistrationDocuments = { year_level: number | null; has_submitted_documents: boolean };
+type RegistrationDocuments = { year_level: number | null; has_submitted_documents: boolean; is_demo_account?: boolean };
 type EnrollmentAction = { kind: "add"; course: CourseOffering } | { kind: "cancel"; requestCode: string; courseCode: string } | null;
 
 export default function EnrollmentPage() {
+  const academicTerm = useAcademicContext();
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [catalog, setCatalog] = useState<CourseOffering[]>([]);
   const [registrationDocuments, setRegistrationDocuments] = useState<RegistrationDocuments | null>(null);
@@ -46,7 +48,8 @@ export default function EnrollmentPage() {
   const availableCatalog = catalog.filter((course) => !enrolledCodes.has(course.course_code));
   const totalUnits = enrollments.reduce((total, item) => total + Number(item.units), 0);
   const documentsRequired = Number(registrationDocuments?.year_level) === 1
-    && registrationDocuments?.has_submitted_documents === false;
+    && registrationDocuments?.has_submitted_documents === false
+    && registrationDocuments?.is_demo_account !== true;
 
   async function refresh() {
     const [enrollmentResponse, courseResponse, registrationResponse] = await Promise.all([
@@ -126,14 +129,14 @@ export default function EnrollmentPage() {
       <main className="min-w-0 flex-1 p-5 pb-24 sm:p-8 lg:ml-64 lg:pb-8">
         <div className="mx-auto max-w-6xl">
           <div className="mb-7">
-            <p className="text-sm font-medium text-blue-600">Academic year 2026–2027</p>
+            <p className="text-sm font-medium text-blue-600">Academic year {academicTerm?.year_label ?? "—"}</p>
             <h1 className="mt-1 text-2xl font-bold">Enrollment</h1>
             <p className="mt-1 text-sm text-slate-500">Review your course requests and current registration.</p>
           </div>
           <div className="mb-5 grid gap-4 sm:grid-cols-3">
             <div className="rounded-2xl border bg-white p-4">
               <p className="text-sm text-slate-500">Semester</p>
-              <p className="mt-1 font-semibold">Active term</p>
+              <p className="mt-1 font-semibold">{academicTerm?.term_name === "1st semester" ? "1st Semester" : academicTerm?.term_name === "2nd semester" ? "2nd Semester" : academicTerm?.term_name ?? "Unavailable"}</p>
             </div>
             <div className="rounded-2xl border bg-white p-4">
               <p className="text-sm text-slate-500">Registered courses</p>
@@ -246,7 +249,7 @@ export default function EnrollmentPage() {
               ))}
               {!loading && catalog.length === 0 && (
                 <p className="rounded-xl border border-dashed p-5 text-sm text-slate-500">
-                  There are no open course offerings for the active term.
+                  There are no open course offerings for the current semester.
                 </p>
               )}
               {!loading && catalog.length > 0 && availableCatalog.length === 0 && (
