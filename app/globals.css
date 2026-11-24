@@ -4,13 +4,32 @@
 :root { --bg:#f5f7fb; --surface:#ffffff; --border:#eef2f7; --text:#111827; --muted:#6b7280; --primary:#2563EB; --primary-light:#eff6ff; }
 body { background:var(--bg); color:var(--text); font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .print-application { display:none; }
+.print-registration { display:none; }
+.attendance-report-print { display:none; }
 @media print {
+  @page attendance { size: A4 landscape; margin: 10mm; }
+  body:has(.attendance-report-print) * { visibility:hidden !important; }
+  body:has(.attendance-report-print) .attendance-report-print,
+  body:has(.attendance-report-print) .attendance-report-print * { visibility:visible !important; }
+  .attendance-report-print { display:block !important; position:absolute; inset:0; width:100%; page:attendance; color:#111827; font:9pt Arial,sans-serif; }
+  .attendance-report-print h1 { margin:0 0 3mm; color:#1e3a8a; font-size:16pt; }
+  .attendance-print-subtitle { margin:0 0 2mm; color:#475569; font-size:8pt; }
+  .attendance-print-summary { margin:0 0 4mm; padding:2mm; border:1px solid #cbd5e1; font-size:8pt; }
+  .attendance-report-print table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:7pt; }
+  .attendance-report-print thead { display:table-header-group; }
+  .attendance-report-print th, .attendance-report-print td { border:1px solid #cbd5e1; padding:1.5mm; text-align:left; overflow-wrap:anywhere; vertical-align:top; }
+  .attendance-report-print th { background:#eff6ff !important; color:#1e3a8a; font-size:6.5pt; text-transform:uppercase; }
+  .attendance-report-print tr { break-inside:avoid; }
+  .attendance-print-footer { margin-top:3mm; color:#64748b; font-size:7pt; }
   @page { size: A4 portrait; margin: 5mm; }
   html, body { width:210mm !important; min-height:0 !important; margin:0 !important; background:#fff !important; }
+  html:has(.attendance-report-print), body:has(.attendance-report-print) { width:auto !important; min-height:0 !important; }
   body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .student-application-profile { display:block !important; width:200mm !important; min-height:0 !important; margin:0 !important; background:#fff !important; }
   .student-application-profile aside, .student-application-profile nav, .student-application-profile .screen-main { display:none !important; }
-  .student-application-profile .print-application { display:block !important; width:198mm !important; height:285mm !important; margin:0 !important; padding:0 !important; }
+  .student-application-profile .print-application, .student-application-profile .print-registration { display:none !important; }
+  body[data-print-document="application"] .student-application-profile .print-application { display:block !important; width:198mm !important; height:285mm !important; margin:0 !important; padding:0 !important; }
+  body[data-print-document="registration"] .student-application-profile .print-registration { display:block !important; width:198mm !important; height:285mm !important; margin:0 !important; padding:0 !important; }
   .application-print-page { box-sizing:border-box; width:198mm; height:285mm; overflow:hidden; padding:1mm; background:#fff; color:#111; font-family:Arial, sans-serif; font-size:6.5pt; line-height:1.08; }
   .application-print-header { display:grid; grid-template-columns:1fr 50.8mm; gap:3mm; height:52mm; align-items:start; }
   .application-print-header h1 { margin:2mm 0 1mm; font-size:13pt; line-height:1.1; font-weight:700; }
@@ -26,5 +45,26 @@ body { background:var(--bg); color:var(--text); font-family:Inter, ui-sans-serif
   .application-print-cell { box-sizing:border-box; min-height:6mm; border:.2mm solid #333; padding:.7mm 1.2mm; overflow:hidden; }
   .application-print-label { display:block; margin-bottom:.3mm; color:#333; font-size:5.2pt; }
   .application-print-value { display:block; overflow-wrap:anywhere; font-size:6.3pt; font-weight:500; }
-
+  .registration-print-header { display:grid; grid-template-columns:1fr 50.8mm; gap:3mm; height:52mm; align-items:start; }
+  .registration-print-school { margin:0; color:#1e3a8a; font-size:16pt; line-height:1.1; font-weight:800; }
+  .registration-print-subtitle { margin:1mm 0; color:#1d4ed8; font-size:7pt; font-weight:700; letter-spacing:.5pt; text-transform:uppercase; }
+  .registration-print-header h1 { margin:2mm 0 1mm; color:#1e3a8a; font-size:13pt; line-height:1.1; font-weight:800; }
+  .registration-print-header p:last-child { margin:1mm 0; font-size:6.5pt; }
+  .registration-print-page .application-print-bar { background:#1e3a8a; }
+  .registration-student-grid .application-print-cell { min-height:6mm; }
+  .registration-print-table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:5.4pt; line-height:1.12; }
+  .registration-print-table th, .registration-print-table td { border:.2mm solid #64748b; padding:.8mm 1mm; overflow-wrap:anywhere; vertical-align:top; }
+  .registration-print-table th { background:#eff6ff; color:#1e3a8a; font-size:5pt; text-align:left; text-transform:uppercase; }
+  .registration-print-table th:nth-child(1) { width:17%; }
+  .registration-print-table th:nth-child(2) { width:12%; }
+  .registration-print-table th:nth-child(3) { width:13%; }
+  .registration-print-table th:nth-child(4) { width:33%; }
+  .registration-print-table th:nth-child(5) { width:17%; }
+  .registration-print-table th:nth-child(6) { width:8%; text-align:right; }
+  .registration-print-table td:last-child { text-align:right; }
+  .registration-print-table tfoot td { background:#eff6ff; font-weight:700; text-align:right; }
+  .registration-print-note { border:.2mm solid #64748b; padding:2mm; font-size:6pt; }
+  .registration-print-validation { display:flex; align-items:center; justify-content:space-between; gap:3mm; min-height:10mm; border:.2mm solid #64748b; padding:2mm; color:#1d4ed8; font-size:6pt; }
+  .registration-print-validation strong { font-size:10pt; }
+  .registration-print-footer { margin-top:2mm; border-top:.2mm solid #64748b; padding-top:1mm; color:#475569; font-size:5.5pt; }
 }

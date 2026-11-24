@@ -6,3 +6,7 @@ backend/local_config.php
 !.env.example
 *.log
 student_initial_credentials.csv
+/tmp/
+student_roster.xlsx
+faculty_roster.xlsx
+121verbs_anki.txt

@@ -55,14 +55,22 @@ XAMPP provides Apache, PHP, MySQL, and phpMyAdmin for local development.
    to existing databases to store private PDF uploads with each first-year
    account registration request, then apply
    [`database/migrations/20261113_student_registration_phone.sql`](./database/migrations/20261113_student_registration_phone.sql)
-   to capture the applicant's optional phone number. These migrations do not reset existing
+   to capture the applicant's optional phone number. Finally apply
+   [`database/migrations/20261123_course_number_academic_year_prefix.sql`](./database/migrations/20261123_course_number_academic_year_prefix.sql)
+   to convert course numbers to the `YY` + `YY` academic-year prefix format. Apply
+   [`database/migrations/20261125_section_capacity_10.sql`](./database/migrations/20261125_section_capacity_10.sql)
+   to set the maximum section offering capacity to 10. Apply
+   [`database/migrations/20261126_student_records_and_course_eligibility.sql`](./database/migrations/20261126_student_records_and_course_eligibility.sql)
+   to separate student login accounts from registrar academic records and add prerequisite/result history. Until an official prerequisite checklist is loaded, the system uses earlier required curriculum courses as a temporary prerequisite rule.
+   These migrations do not reset existing
    records. The consolidated schema stores login credentials and student/employee
    attributes directly in `users`. Instructor names on course offerings remain
    as references; grading and GPA are not supported. Attendance reuses the
    existing course, section, enrollment, and weekly class-meeting records.
 3. Copy the contents of [`backend/`](./backend) into
-   `C:\xampp\htdocs\edutrack-api\`. The API URL should then be
-   `http://localhost/edutrack-api/api.php`.
+   `C:\xampp\htdocs\edutrack-api\`. In a browser, the API uses the same
+   hostname as the frontend (for example, opening `http://192.168.18.12:3001`
+   uses `http://192.168.18.12/edutrack-api/api.php`).
 4. In that XAMPP folder, copy `local_config.php.example` to `local_config.php`.
    Set the MySQL password if your XAMPP `root` account has one. Install and
    start Docker Desktop, then start the official CompreFace stack locally:
@@ -134,11 +142,32 @@ between presentations. Sign-in persists across browser restarts for up to 30
 days; choose **Log out** on shared devices. The demo accounts are listed above;
 each uses the password `password`.
 
-The frontend defaults to `http://localhost/edutrack-api/api.php`. To use a
-different API URL, set `NEXT_PUBLIC_EDUTRACK_API_URL` in a project-root
-`.env.local` file and restart Next.js. If the frontend origin changes, add that
-exact origin to `allowed_origins` in `local_config.php`. The provided local
-configuration allows both frontend ports 3000 and 3001.
+### Accessing EduTrack from a tablet on the same network
+
+Open EduTrack using the laptop's LAN address, such as
+`http://192.168.18.12:3001`. The browser API client derives the API hostname
+from the page hostname; do not set it to `localhost` for a tablet, because that
+would refer to the tablet itself. If you set
+`NEXT_PUBLIC_EDUTRACK_API_URL` in `.env.local`, remove or update it so it does
+not override this behavior.
+
+In `C:\xampp\htdocs\edutrack-api\local_config.php`, add the exact frontend
+origin to `allowed_origins`, including its port, for example:
+`http://192.168.18.12:3001`. If the laptop's LAN address changes, update this
+entry. Apache must be running and reachable from the tablet on port 80, and the
+frontend must be reachable on port 3001.
+
+After changing frontend code, rebuild and restart the production server. A
+stale `next start` process can keep serving old JavaScript even after a build.
+Check which process owns port 3001 (`netstat -ano | findstr :3001`), confirm it
+is EduTrack's Next.js process, stop that process, then start the app again from
+the project directory. Check the sign-in page's current `/_next/static/chunks/`
+script reference if an old API URL is still shown. On the tablet, close the old
+tab and reopen the LAN URL to load the rebuilt page.
+
+To intentionally use another API URL, set `NEXT_PUBLIC_EDUTRACK_API_URL` in a
+project-root `.env.local` file and restart Next.js. Add the frontend's exact
+origin to `allowed_origins` in the XAMPP `local_config.php` as well.
 Face attendance needs a browser camera and therefore requires HTTPS outside
 `localhost`. The liveness model weight files are served locally from
 `public/models`; no face-model CDN is used. Face images are sent only to the
@@ -147,6 +176,17 @@ database volume private and use **Revoke face enrollment** to remove a student's
 stored subject. A production release needs an independently verified liveness
 pipeline and formal privacy review; the browser alone is not a trusted source
 for anti-spoof scores.
+
+For the local tablet kiosk, XAMPP Apache serves the app and PHP API together at
+`https://192.168.18.12` and proxies frontend requests to the Next.js server on
+port 3001. The local certificate authority file is available at
+`http://192.168.18.12/edutrack-lan-ca.crt`. Install that CA certificate on the
+tablet as a trusted CA certificate before opening the HTTPS address; then grant
+camera permission to the browser. Never copy or publish the CA private key.
+Opening the plain HTTP address on a tablet does not provide browser camera
+access. If the laptop's LAN IP changes, regenerate the server certificate with
+the new IP in its subject alternative name, update the HTTPS API origin in
+XAMPP `local_config.php`, and restart Apache.
 
 ## Included backend actions
 

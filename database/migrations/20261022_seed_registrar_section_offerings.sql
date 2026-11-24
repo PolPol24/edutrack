@@ -7,7 +7,7 @@ WHERE section_code REGEXP '^[A-Z]+-[1-4][A-C]$';
 INSERT INTO course_offerings (course_id, term_id, section_code, capacity, offering_status)
 SELECT pc.course_id, t.term_id,
        CONCAT(p.program_code, '-', pc.recommended_year, '-', sections.section_letter),
-       40, 'open'
+       10, 'open'
 FROM program_courses pc
 JOIN programs p ON p.program_id = pc.program_id AND p.is_active = 1
 JOIN courses c ON c.course_id = pc.course_id AND c.course_status = 'active'
@@ -15,7 +15,7 @@ JOIN academic_terms t ON t.term_status IN ('active', 'upcoming')
   AND t.term_name = CASE pc.recommended_semester WHEN 1 THEN '1st semester' WHEN 2 THEN '2nd semester' END
 CROSS JOIN (SELECT 'A' AS section_letter UNION ALL SELECT 'B' UNION ALL SELECT 'C') sections
 WHERE pc.is_required = 1 AND pc.recommended_semester IS NOT NULL
-ON DUPLICATE KEY UPDATE offering_id = LAST_INSERT_ID(offering_id);
+ON DUPLICATE KEY UPDATE offering_id = LAST_INSERT_ID(offering_id), capacity = 10;
 
 UPDATE course_offerings co
 JOIN academic_terms t ON t.term_id = co.term_id

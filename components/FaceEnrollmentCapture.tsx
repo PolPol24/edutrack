@@ -47,6 +47,24 @@ export default function FaceEnrollmentCapture({ onCapture, buttonLabel = "Start 
     setStatus("Loading the on-device liveness check…");
     let stream: MediaStream | undefined;
     try {
+      const previousStream = videoRef.current?.srcObject as MediaStream | null;
+      previousStream?.getTracks().forEach((track) => track.stop());
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Camera access requires EduTrack over a secure HTTPS connection. Open the secure EduTrack address and allow camera access.");
+      }
+      let cameraError: unknown;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "user" }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      } catch (error) {
+        cameraError = error;
+      }
+      if (!stream) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        } catch {
+          throw cameraError;
+        }
+      }
       const { default: Human } = await import("@vladmandic/human-browser");
       const human = new Human({
         modelBasePath: "/models/",
@@ -69,7 +87,6 @@ export default function FaceEnrollmentCapture({ onCapture, buttonLabel = "Start 
       });
       await human.load();
       await human.warmup();
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
       const video = videoRef.current;
       if (!video) throw new Error("Camera preview is unavailable.");
       video.srcObject = stream;
@@ -120,7 +137,13 @@ export default function FaceEnrollmentCapture({ onCapture, buttonLabel = "Start 
     } catch (error) {
       stream?.getTracks().forEach((track) => track.stop());
       setRunning(false);
-      setStatus(error instanceof Error ? error.message : "Camera or face model could not start.");
+      const name = error instanceof DOMException ? error.name : "";
+      const message = name === "NotReadableError" || name === "AbortError"
+        ? "The camera could not start. Close other apps or browser tabs using the camera, then try again."
+        : name === "NotAllowedError"
+          ? "Camera permission was blocked. Allow camera access for EduTrack in the browser, then try again."
+          : error instanceof Error ? error.message : "Camera or face model could not start.";
+      setStatus(message);
       setLoading(false);
     }
   }

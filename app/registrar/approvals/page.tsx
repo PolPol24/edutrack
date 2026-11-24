@@ -17,6 +17,7 @@ type EnrollmentRequest = {
   course_code: string;
   course_title: string;
   units: number | string;
+  is_irregular: number | string;
 };
 type Confirmation =
   | { kind: "all" }
@@ -206,6 +207,7 @@ export default function Page() {
                         <span className="text-xs text-slate-500">
                           {request.student_number} · {request.program_name}
                         </span>
+                        {Number(request.is_irregular) === 1 && <span className="rounded-full bg-violet-50 px-2 py-1 text-xs font-semibold text-violet-700">Irregular · prerequisites checked before request</span>}
                       </div>
                       <p className="mt-2 text-sm font-medium text-slate-700">
                         {request.course_code} · {request.course_title}

@@ -121,6 +121,20 @@ function require_user(?string $role = null): array
         send_json(401, ['error' => 'This account is unavailable. Please sign in with an active account.']);
     }
 
+    if ($currentUser['role'] !== 'admin') {
+        $timeoutValue = database()->query(
+            "SELECT JSON_UNQUOTE(setting_value) FROM system_settings WHERE setting_key = 'session_timeout_minutes' LIMIT 1"
+        )->fetchColumn();
+        $timeoutMinutes = $timeoutValue === false ? 30 : max(0, (int)$timeoutValue);
+        $lastActivity = (int)($_SESSION['edutrack_last_activity'] ?? time());
+        if ($timeoutMinutes > 0 && time() - $lastActivity >= $timeoutMinutes * 60) {
+            $_SESSION = [];
+            session_regenerate_id(true);
+            send_json(401, ['error' => 'Your session expired after being inactive. Please sign in again.']);
+        }
+        $_SESSION['edutrack_last_activity'] = time();
+    }
+
     $action = (string)($_GET['action'] ?? '');
     if ((bool)$currentUser['must_change_password']
         && !in_array($action, ['me', 'change_password', 'logout'], true)) {

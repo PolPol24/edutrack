@@ -1,0 +1,21 @@
+ROOM | Thursday 09:00-11:00 GYM | BSCS-1-A FITT 1 (D. Miranda) overlaps BSIT-2-B FITT 3 () 09:30-11:30
+ROOM | Monday 07:00-08:00 RM 313 | BSCS-1-B DCIT 22 (J. Alabanza) overlaps BSCS-4-A COSC 105 (E. Cahapin) 07:00-09:00
+ROOM | Monday 08:00-10:00 CL 1 | BSCS-1-B DCIT 22 (J. Alabanza) overlaps BSCS-4-A COSC 105 (E. Cahapin) 09:00-11:00
+ROOM | Tuesday 15:00-16:00 GYM | BSCS-1-B FITT 1 (Manimtim) overlaps BSIT-1-C FITT 1 (J. Guillermo) 14:30-16:30
+INSTRUCTOR | Thursday 16:00-18:00 RM 224 | BSCS-1-B GNED 05 (R. Sico) overlaps BSIT-2-C GNED 07 (R. Sico) 14:30-16:30
+ROOM | Monday 14:00-16:00 GYM | BSCS-1-C FITT 1 (M. Manalo) overlaps BSCS-2-B FITT 3 () 14:00-16:00
+ROOM | Tuesday 09:00-10:00 RM 333A | BSCS-1-C CvSU 101 (L. Magbanua) overlaps BSIT-3-B ITEC 85 (J. Nadala) 08:30-10:30
+ROOM | Thursday 13:00-15:00 GYM | BSCS-2-A FITT 3 (Manimtim) overlaps BSIT-2-E FITT 3 () 11:30-13:30
+ROOM | Monday 10:00-12:00 RM 333B | BSCS-2-B DCIT 50 (R. Panti) overlaps BSCS-4-B ITEC 80 (R. Panti) 11:00-13:00
+ROOM | Monday 10:00-12:00 RM 333B | BSCS-2-B DCIT 50 (R. Panti) overlaps BSIT-1-A DCIT 22 (J. Roce) 09:00-10:30
+ROOM | Monday 11:00-13:00 RM 334B | BSCS-2-C DCIT 24 (G. Dumlao) overlaps BSIT-1-A DCIT 21 (P. Magno) 12:00-14:00
+ROOM | Friday 11:00-13:00 RM 334A | BSCS-2-D MATH 1 (J. USA) overlaps BSCS-3-C DCIT 65 (J. Roce) 12:00-14:00
+ROOM | Friday 14:00-16:00 RM 334A | BSCS-2-D DCIT 24 (G. Dumlao) overlaps BSIT-2-A DCIT 24 (L. Magbanua) 15:30-17:30
+INSTRUCTOR | Tuesday 07:00-09:00 CL 2 | BSCS-3-D COSC 80 (J. Nadala) overlaps BSIT-3-B ITEC 85 (J. Nadala) 08:30-10:30
+ROOM | Monday 13:00-15:00 RM 313 | BSCS-4-C COSC 105 (E. Cahapin) overlaps BSIT-3-E DCIT 60 (B. Malabag) 14:00-16:00
+ROOM | Tuesday 16:00-18:00 GYM | BSIT-1-A FITT 1 (Manimtim) overlaps BSIT-1-C FITT 1 (J. Guillermo) 14:30-16:30
+ROOM | Tuesday 09:00-11:00 GYM | BSIT-1-B FITT 1 (M. Manalo) overlaps BSIT-2-C FITT 3 () 09:00-11:00
+ROOM | Friday 15:30-17:30 CL 4 | BSIT-1-B DCIT 22 (J. Roce) overlaps BSIT-3-E ITEC 80 (E. Dulanas) 14:00-16:00
+ROOM | Wednesday 09:00-10:00 RM 334A | BSIT-1-C DCIT 22 (J. Roce) overlaps BSIT-2-E DCIT 24 (L. Magbanua) 09:30-11:30
+INSTRUCTOR | Thursday 12:00-14:00 RM 222 | BSIT-2-A GNED 07 (Velasquez) overlaps BSIT-2-D GNED 04 (Velasquez) 10:30-12:30
+ROOM | Thursday 10:30-12:30 RM 213 | BSIT-2-D GNED 04 (Velasquez) overlaps BSIT-4-B ITEC 110 (C. Ramos) 09:00-11:00

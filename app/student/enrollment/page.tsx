@@ -23,6 +23,11 @@ type CourseOffering = {
   course_title: string;
   units: number | string;
   section_code: string;
+  recommended_year?: number;
+  is_irregular?: number | string;
+  eligibility?: "eligible" | "blocked";
+  eligibility_reason?: string;
+  is_retake?: boolean | number;
 };
 type RegistrationDocuments = { year_level: number | null; has_submitted_documents: boolean };
 type EnrollmentAction = { kind: "add"; course: CourseOffering } | { kind: "cancel"; requestCode: string; courseCode: string } | null;
@@ -222,7 +227,7 @@ export default function EnrollmentPage() {
           <section className="mt-6 rounded-2xl border bg-white p-5">
             <h2 className="font-semibold">Course catalog</h2>
             <p className="mt-1 text-sm text-slate-500">
-              {documentsRequired ? "Submit your registration documents before requesting enrollment." : "Available courses you can request to add."}
+              {documentsRequired ? "Submit your registration documents before requesting enrollment." : "Available courses you can request to add. Irregular students may request higher-year courses with no listed prerequisites or after passing every listed prerequisite."}
             </p>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               {availableCatalog.map((course) => (
@@ -230,11 +235,12 @@ export default function EnrollmentPage() {
                   <div>
                     <p className="font-semibold">{course.course_code} · {course.course_title}</p>
                     <p className="mt-1 text-sm text-slate-500">
-                      {course.units} units · Section {course.section_code} · Request requires registrar approval
+                      {course.units} units · Year {course.recommended_year ?? "—"} · Section {course.section_code} · {course.is_retake ? "Failed course retake" : Number(course.recommended_year ?? 0) > (registrationDocuments?.year_level ?? Number(course.recommended_year ?? 0)) ? "Advance course" : "Standard sequence"}
                     </p>
+                    <p className={`mt-1 text-xs font-medium ${course.eligibility !== "blocked" ? "text-emerald-700" : "text-rose-700"}`}>{course.eligibility === "blocked" ? `Not eligible · ${course.eligibility_reason}` : `Eligible · ${course.eligibility_reason ?? "Standard sequence."}`}</p>
                   </div>
-                  <button disabled={saving || documentsRequired} onClick={() => { setConfirmationError(""); setConfirmation({ kind: "add", course }); }} className="inline-flex shrink-0 items-center gap-1 rounded-lg border px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50">
-                    <Plus size={15} />{documentsRequired ? "Submit documents first" : "Add"}
+                  <button disabled={saving || documentsRequired || course.eligibility === "blocked"} onClick={() => { setConfirmationError(""); setConfirmation({ kind: "add", course }); }} className="inline-flex shrink-0 items-center gap-1 rounded-lg border px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50">
+                    <Plus size={15} />{documentsRequired ? "Submit documents first" : course.eligibility === "blocked" ? "Prerequisite missing" : "Add"}
                   </button>
                 </div>
               ))}

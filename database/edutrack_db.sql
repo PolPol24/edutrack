@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS departments (
   UNIQUE KEY uq_departments_name (department_name)
 ) ENGINE=InnoDB;
 
+
+
 CREATE TABLE IF NOT EXISTS programs (
   program_id VARCHAR(10) NOT NULL,
   program_code VARCHAR(20) NOT NULL,
@@ -306,7 +308,7 @@ CREATE TABLE IF NOT EXISTS course_offerings (
   term_id BIGINT UNSIGNED NOT NULL,
   section_code VARCHAR(30) NOT NULL,
   instructor_name VARCHAR(160) NULL,
-  capacity SMALLINT UNSIGNED NOT NULL DEFAULT 40,
+  capacity SMALLINT UNSIGNED NOT NULL DEFAULT 10,
   offering_status ENUM('open', 'closed', 'cancelled') NOT NULL DEFAULT 'open',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (offering_id),
@@ -382,6 +384,47 @@ CREATE TABLE IF NOT EXISTS enrollments (
     FOREIGN KEY (reviewed_by_user_id) REFERENCES users (user_id)
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB;
+
+-- Registrar-maintained academic records are distinct from login accounts.
+CREATE TABLE IF NOT EXISTS student_records (
+  user_id BIGINT UNSIGNED NOT NULL,
+  student_number VARCHAR(30) NOT NULL,
+  program_id VARCHAR(10) NOT NULL,
+  year_level TINYINT UNSIGNED NOT NULL,
+  student_status ENUM('active', 'on_leave', 'graduated', 'withdrawn') NOT NULL DEFAULT 'active',
+  is_irregular BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id), UNIQUE KEY uq_student_records_number (student_number),
+  KEY ix_student_records_program_year (program_id, year_level, student_status),
+  CONSTRAINT chk_student_records_year CHECK (year_level BETWEEN 1 AND 4),
+  CONSTRAINT fk_student_records_user FOREIGN KEY (user_id) REFERENCES users (user_id) ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_student_records_program FOREIGN KEY (program_id) REFERENCES programs (program_id) ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS course_prerequisites (
+  program_id VARCHAR(10) NOT NULL, course_id VARCHAR(10) NOT NULL, prerequisite_course_id VARCHAR(10) NOT NULL,
+  PRIMARY KEY (program_id, course_id, prerequisite_course_id),
+  CONSTRAINT fk_course_prereq_program FOREIGN KEY (program_id) REFERENCES programs (program_id) ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_course_prereq_course FOREIGN KEY (course_id) REFERENCES courses (course_id) ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_course_prereq_required FOREIGN KEY (prerequisite_course_id) REFERENCES courses (course_id) ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS student_course_results (
+  result_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, student_user_id BIGINT UNSIGNED NOT NULL,
+  course_id VARCHAR(10) NOT NULL, term_id BIGINT UNSIGNED NOT NULL,
+  result_status ENUM('passed', 'failed', 'incomplete') NOT NULL,
+  recorded_by_user_id BIGINT UNSIGNED NOT NULL, recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (result_id), UNIQUE KEY uq_student_course_result (student_user_id, course_id, term_id),
+  CONSTRAINT fk_student_result_student FOREIGN KEY (student_user_id) REFERENCES student_records (user_id) ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_student_result_course FOREIGN KEY (course_id) REFERENCES courses (course_id) ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_student_result_term FOREIGN KEY (term_id) REFERENCES academic_terms (term_id) ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_student_result_recorder FOREIGN KEY (recorded_by_user_id) REFERENCES users (user_id) ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+INSERT IGNORE INTO student_records (user_id, student_number, program_id, year_level, student_status)
+SELECT user_id, student_number, program_id, year_level, COALESCE(student_status, 'active') FROM users
+WHERE role = 'student' AND student_number IS NOT NULL AND program_id IS NOT NULL AND year_level IS NOT NULL;
 
 -- 5. Application settings
 CREATE TABLE IF NOT EXISTS system_settings (
@@ -605,7 +648,7 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO course_offerings (course_id, term_id, section_code, capacity, offering_status)
 SELECT pc.course_id, t.term_id,
   CONCAT(programs.program_code, '-', pc.recommended_year, '-', sections.section_letter),
-  40, 'open'
+  10, 'open'
 FROM program_courses pc
 JOIN programs ON programs.program_id = pc.program_id AND programs.is_active = 1
 JOIN courses ON courses.course_id = pc.course_id AND courses.course_status = 'active'
@@ -621,7 +664,7 @@ UPDATE course_offerings co
 JOIN (
   SELECT co.offering_id,
          CONCAT(
-           LEFT(ay.year_label, 4),
+           CONCAT(SUBSTRING(ay.year_label, 3, 2), SUBSTRING(ay.year_label, 8, 2)),
            CASE t.term_name WHEN '1st semester' THEN '1' WHEN '2nd semester' THEN '2' ELSE '0' END,
            LPAD(ROW_NUMBER() OVER (
              PARTITION BY t.term_id

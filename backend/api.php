@@ -3,6 +3,46 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/config.php';
 
+function course_number_year_prefix(string $yearLabel): string
+{
+    if (!preg_match('/^(\d{4})-(\d{4})$/', $yearLabel, $parts)) {
+        throw new RuntimeException('The academic year label must use the YYYY-YYYY format.');
+    }
+    return substr($parts[1], 2, 2) . substr($parts[2], 2, 2);
+}
+
+function next_course_number_sequence(PDO $pdo, int $termId): int
+{
+    $statement = $pdo->prepare(
+        'SELECT COALESCE(MAX(CAST(RIGHT(course_number, 4) AS UNSIGNED)), 0) + 1
+         FROM course_offerings WHERE term_id = :term_id'
+    );
+    $statement->execute(['term_id' => $termId]);
+    return (int)$statement->fetchColumn();
+}
+
+function course_prerequisite_check(PDO $pdo, int $studentUserId, string $programId, string $courseId): array
+{
+    $explicit = $pdo->prepare('SELECT prerequisite_course_id FROM course_prerequisites WHERE program_id = :program_id AND course_id = :course_id');
+    $explicit->execute(['program_id' => $programId, 'course_id' => $courseId]);
+    $prerequisites = array_column($explicit->fetchAll(), 'prerequisite_course_id');
+    $missing = [];
+    $result = $pdo->prepare(
+        'SELECT result_status FROM student_course_results WHERE student_user_id = :student_user_id AND course_id = :course_id
+         ORDER BY recorded_at DESC LIMIT 1'
+    );
+    foreach ($prerequisites as $prerequisiteId) {
+        $result->execute(['student_user_id' => $studentUserId, 'course_id' => $prerequisiteId]);
+        if ($result->fetchColumn() !== 'passed') $missing[] = $prerequisiteId;
+    }
+    return [
+        'eligible' => count($missing) === 0,
+        'missing_course_ids' => $missing,
+        'has_prerequisites' => count($prerequisites) > 0,
+        'rule' => 'course_catalog',
+    ];
+}
+
 function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null): array
 {
     $name = trim((string)($body['full_name'] ?? ''));
@@ -14,64 +54,22 @@ function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null):
         || strlen($password) < 8) {
         send_json(422, ['error' => 'Provide a valid name, email, role, and password of at least 8 characters.']);
     }
-    $faceImages = $role === 'student' ? compreface_images($body) : [];
-
     $pdo->beginTransaction();
     $insert = $pdo->prepare(
-        'INSERT INTO users (full_name, email, password_hash, role)
-         VALUES (:full_name, :email, :password_hash, :role)'
+        'INSERT INTO users (full_name, email, password_hash, role, account_status)
+         VALUES (:full_name, :email, :password_hash, :role, :account_status)'
     );
     $insert->execute([
         'full_name' => $name,
         'email' => $email,
         'password_hash' => password_hash($password, PASSWORD_DEFAULT),
         'role' => $role,
+        'account_status' => $role === 'student' ? 'suspended' : 'active',
     ]);
     $userId = (int)$pdo->lastInsertId();
 
     if ($role === 'student') {
-        $programId = trim((string)($body['program_id'] ?? ''));
-        if ($programId === '') {
-            $programId = (string)$pdo->query("SELECT program_id FROM programs WHERE is_active = 1 ORDER BY FIELD(program_code, 'BSCS', 'BSIT'), program_code LIMIT 1")->fetchColumn();
-        }
-        $yearLevel = filter_var($body['year_level'] ?? 1, FILTER_VALIDATE_INT);
-        if (!$programId || !$yearLevel || $yearLevel < 1 || $yearLevel > 4) {
-            $pdo->rollBack();
-            send_json(422, ['error' => 'Select a valid academic program and a year level from 1 to 4.']);
-        }
-        $studentNumber = trim((string)($body['student_number'] ?? ''));
-        if ($studentNumber === '') {
-            do {
-                $studentNumber = date('Y') . str_pad((string)random_int(0, 99999), 5, '0', STR_PAD_LEFT);
-                $checkNumber = $pdo->prepare('SELECT 1 FROM users WHERE student_number = :student_number');
-                $checkNumber->execute(['student_number' => $studentNumber]);
-            } while ($checkNumber->fetchColumn());
-        }
-        $profile = $pdo->prepare(
-            'UPDATE users
-             SET student_number = :student_number, program_id = :program_id,
-                 year_level = :year_level, student_status = \'active\'
-             WHERE user_id = :user_id'
-        );
-        $profile->execute([
-            'user_id' => $userId,
-            'student_number' => $studentNumber,
-            'program_id' => $programId,
-            'year_level' => $yearLevel,
-        ]);
-        $subject = compreface_new_subject('student', $userId);
-        compreface_register_images($subject, $faceImages);
-        try {
-            $face = $pdo->prepare('INSERT INTO compreface_student_faces (student_user_id, compreface_subject, template_status, consent_at) VALUES (:student_user_id, :subject, \'active\', NOW())');
-            $face->execute(['student_user_id' => $userId, 'subject' => $subject]);
-        } catch (Throwable $error) {
-            try {
-                compreface_delete_subject($subject);
-            } catch (Throwable $cleanupError) {
-                error_log('Unable to clean up CompreFace enrollment after account creation failed: ' . $cleanupError->getMessage());
-            }
-            throw $error;
-        }
+        // Student login accounts are completed by the registrar when the academic record is added.
     } elseif ($role === 'registrar') {
         $departmentId = filter_var($body['department_id'] ?? null, FILTER_VALIDATE_INT) ?: null;
         $employeeNumber = trim((string)($body['employee_number'] ?? ''));
@@ -92,7 +90,7 @@ function create_user_account(PDO $pdo, array $body, ?string $forcedRole = null):
     }
 
     $pdo->commit();
-    return ['user_id' => $userId, 'full_name' => $name, 'email' => $email, 'role' => $role, 'account_status' => 'active'];
+    return ['user_id' => $userId, 'full_name' => $name, 'email' => $email, 'role' => $role, 'account_status' => $role === 'student' ? 'suspended' : 'active'];
 }
 
 $storedUploads = [];
@@ -1010,6 +1008,16 @@ try {
                     'year_level' => (int)$registration['year_level'],
                 ]);
                 $createdUserId = (int)$pdo->lastInsertId();
+                $studentRecord = $pdo->prepare(
+                    'INSERT INTO student_records (user_id, student_number, program_id, year_level, student_status)
+                     VALUES (:user_id, :student_number, :program_id, :year_level, \'active\')'
+                );
+                $studentRecord->execute([
+                    'user_id' => $createdUserId,
+                    'student_number' => $assignedStudentNumber,
+                    'program_id' => $registration['program_id'],
+                    'year_level' => (int)$registration['year_level'],
+                ]);
                 $saveFace = $pdo->prepare('INSERT INTO compreface_student_faces (student_user_id, compreface_subject, template_status, consent_at) VALUES (:student_user_id, :subject, \'active\', :consent_at)');
                 $saveFace->execute(['student_user_id' => $createdUserId, 'subject' => $faceRow['compreface_subject'], 'consent_at' => $faceRow['consent_at']]);
                 $deleteFace = $pdo->prepare('DELETE FROM pending_compreface_student_faces WHERE request_id = :request_id');
@@ -1218,6 +1226,21 @@ try {
         }
         session_destroy();
         send_json(200, ['message' => 'Signed out.']);
+    }
+
+    if ($action === 'email_check') {
+        request_method('GET');
+        $viewer = require_user();
+        if (!in_array($viewer['role'], ['admin', 'registrar'], true)) {
+            send_json(403, ['error' => 'This check requires a registrar or admin account.']);
+        }
+        $email = strtolower(trim((string)($_GET['email'] ?? '')));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            send_json(422, ['error' => 'Enter a valid email address first.']);
+        }
+        $exists = $pdo->prepare('SELECT 1 FROM users WHERE email = :email LIMIT 1');
+        $exists->execute(['email' => $email]);
+        send_json(200, ['exists' => (bool)$exists->fetchColumn()]);
     }
 
     if ($action === 'profile') {
@@ -1698,18 +1721,20 @@ try {
         request_method('GET');
         $user = require_user('student');
         $statement = $pdo->prepare(
-            'SELECT e.enrollment_id, c.course_code, c.course_title, c.units,
+            'SELECT e.enrollment_id, c.course_code, c.course_title, c.description, c.units,
+                    co.course_number,
                     co.section_code, COALESCE(co.instructor_name, \'Unassigned\') AS instructor
              FROM enrollments e
              JOIN course_offerings co ON co.offering_id = e.offering_id
              JOIN courses c ON c.course_id = co.course_id
              JOIN users sp ON sp.user_id = e.student_user_id
              JOIN programs p ON p.program_id = sp.program_id
+             JOIN student_records sr ON sr.user_id = sp.user_id
              JOIN program_courses pc ON pc.program_id = sp.program_id
-               AND pc.course_id = c.course_id AND pc.recommended_year = sp.year_level
+               AND pc.course_id = c.course_id
              JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status = \'active\'
              WHERE e.student_user_id = :student_user_id AND e.enrollment_status = \'approved\'
-               AND co.section_code LIKE CONCAT(p.program_code, \'-\', sp.year_level, \'%\')
+               AND co.section_code LIKE CONCAT(p.program_code, \'-\', pc.recommended_year, \'-%\')
              ORDER BY c.course_code'
         );
         $statement->execute(['student_user_id' => $user['user_id']]);
@@ -1717,11 +1742,44 @@ try {
     }
 
     if ($action === 'registrar_students') {
+        if ($method === 'GET' && isset($_GET['lookup_email'])) {
+            require_user('registrar');
+            $email = strtolower(trim((string)$_GET['lookup_email']));
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                send_json(422, ['error' => 'Enter a valid student account email address.']);
+            }
+            $lookup = $pdo->prepare(
+                'SELECT u.user_id, u.full_name, u.email, u.role,
+                        EXISTS (SELECT 1 FROM student_records sr WHERE sr.user_id = u.user_id) AS has_record
+                 FROM users u WHERE u.email = :email LIMIT 1'
+            );
+            $lookup->execute(['email' => $email]);
+            $account = $lookup->fetch();
+            if (!$account || $account['role'] !== 'student') {
+                send_json(404, ['error' => 'Student account does not exist.']);
+            }
+            if ((int)$account['has_record'] === 1) {
+                send_json(409, ['error' => 'Student account already exists.']);
+            }
+            send_json(200, ['account' => [
+                'user_id' => (int)$account['user_id'],
+                'full_name' => $account['full_name'],
+                'email' => $account['email'],
+            ]]);
+        }
         if ($method === 'PATCH') {
             require_user('registrar');
-            $userId = filter_var(request_body()['user_id'] ?? null, FILTER_VALIDATE_INT);
+            $patchBody = request_body();
+            $userId = filter_var($patchBody['user_id'] ?? null, FILTER_VALIDATE_INT);
             if (!$userId) {
                 send_json(422, ['error' => 'Select a valid student record.']);
+            }
+
+            if (array_key_exists('is_irregular', $patchBody)) {
+                $updateIrregular = $pdo->prepare('UPDATE student_records SET is_irregular = :is_irregular WHERE user_id = :user_id');
+                $updateIrregular->execute(['is_irregular' => !empty($patchBody['is_irregular']) ? 1 : 0, 'user_id' => $userId]);
+                if ($updateIrregular->rowCount() !== 1) send_json(404, ['error' => 'That student record was not found.']);
+                send_json(200, ['message' => 'Student classification updated.']);
             }
 
             $pdo->beginTransaction();
@@ -1744,21 +1802,69 @@ try {
                  WHERE user_id = :user_id'
             );
             $withdraw->execute(['user_id' => $userId]);
+            $pdo->prepare('UPDATE student_records SET student_status = \'withdrawn\' WHERE user_id = :user_id')->execute(['user_id' => $userId]);
             $pdo->commit();
             send_json(200, ['message' => 'Student withdrawn. Their account was suspended and academic records were retained.']);
         }
         if ($method === 'POST') {
             require_user('registrar');
-            $created = create_user_account($pdo, request_body(), 'student');
-            send_json(201, ['message' => 'Student account created. Its initial password is the one entered in the form.', 'user' => $created]);
+            $body = request_body();
+            $userId = filter_var($body['student_user_id'] ?? null, FILTER_VALIDATE_INT);
+            $programId = trim((string)($body['program_id'] ?? ''));
+            $yearLevel = filter_var($body['year_level'] ?? null, FILTER_VALIDATE_INT);
+            if (!$userId || $programId === '' || !$yearLevel || $yearLevel < 1 || $yearLevel > 4) {
+                send_json(422, ['error' => 'Choose an existing student account, program, and year level.']);
+            }
+            $faceImages = compreface_images($body);
+            if (($body['face_consent'] ?? false) !== true) {
+                send_json(422, ['error' => 'Confirm the student face data notice before adding this record.']);
+            }
+            $pdo->beginTransaction();
+            $accountQuery = $pdo->prepare('SELECT user_id, full_name, email, role, student_number, program_id, year_level FROM users WHERE user_id = :user_id FOR UPDATE');
+            $accountQuery->execute(['user_id' => $userId]);
+            $account = $accountQuery->fetch();
+            if (!$account || $account['role'] !== 'student') {
+                $pdo->rollBack();
+                send_json(404, ['error' => 'Student account does not exist.']);
+            }
+            $exists = $pdo->prepare('SELECT 1 FROM student_records WHERE user_id = :user_id');
+            $exists->execute(['user_id' => $userId]);
+            if ($exists->fetchColumn() || $account['student_number'] !== null || $account['program_id'] !== null) {
+                $pdo->rollBack();
+                send_json(409, ['error' => 'Student account already exists.']);
+            }
+            $programCheck = $pdo->prepare('SELECT 1 FROM programs WHERE program_id = :program_id AND is_active = 1');
+            $programCheck->execute(['program_id' => $programId]);
+            if (!$programCheck->fetchColumn()) {
+                $pdo->rollBack();
+                send_json(422, ['error' => 'Select an active academic program.']);
+            }
+            $studentNumber = next_student_number($pdo);
+            $update = $pdo->prepare('UPDATE users SET student_number = :student_number, program_id = :program_id, year_level = :year_level, student_status = \'active\', account_status = \'active\' WHERE user_id = :user_id');
+            $update->execute(['student_number' => $studentNumber, 'program_id' => $programId, 'year_level' => $yearLevel, 'user_id' => $userId]);
+            $insert = $pdo->prepare('INSERT INTO student_records (user_id, student_number, program_id, year_level, student_status, is_irregular) VALUES (:user_id, :student_number, :program_id, :year_level, \'active\', :is_irregular)');
+            $insert->execute(['user_id' => $userId, 'student_number' => $studentNumber, 'program_id' => $programId, 'year_level' => $yearLevel, 'is_irregular' => !empty($body['is_irregular']) ? 1 : 0]);
+            $subject = compreface_new_subject('student', $userId);
+            try {
+                compreface_register_images($subject, $faceImages);
+                $face = $pdo->prepare('INSERT INTO compreface_student_faces (student_user_id, compreface_subject, template_status, consent_at) VALUES (:student_user_id, :subject, \'active\', NOW())');
+                $face->execute(['student_user_id' => $userId, 'subject' => $subject]);
+                $pdo->commit();
+            } catch (Throwable $error) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                try { compreface_delete_subject($subject); } catch (Throwable $cleanupError) { error_log('Unable to clean up CompreFace enrollment after student record creation failed: ' . $cleanupError->getMessage()); }
+                throw $error;
+            }
+            send_json(201, ['message' => 'Student record added and linked to the existing account.', 'user' => ['user_id' => (int)$userId, 'full_name' => $account['full_name'], 'email' => $account['email'], 'student_number' => $studentNumber]]);
         }
         request_method('GET');
         require_user('registrar');
         $statement = $pdo->query(
             'SELECT u.user_id, u.full_name, u.email, u.student_number, u.year_level,
-                    u.student_status, p.program_name,
+                    u.student_status, sr.is_irregular, p.program_name,
                     COALESCE(SUM(CASE WHEN e.enrollment_status = \'approved\' THEN c.units ELSE 0 END), 0) AS units
-             FROM users u
+             FROM student_records sr
+             JOIN users u ON u.user_id = sr.user_id
              JOIN programs p ON p.program_id = u.program_id
              LEFT JOIN enrollments e ON e.student_user_id = u.user_id
              LEFT JOIN course_offerings co ON co.offering_id = e.offering_id
@@ -1766,11 +1872,67 @@ try {
              LEFT JOIN courses c ON c.course_id = co.course_id AND t.term_id IS NOT NULL
              WHERE u.role = \'student\'
              GROUP BY u.user_id, u.full_name, u.email, u.student_number,
-                      u.year_level, u.student_status, p.program_name
+                      u.year_level, u.student_status, sr.is_irregular, p.program_name
              ORDER BY u.full_name'
         );
         $programs = $pdo->query('SELECT program_id, program_name FROM programs WHERE is_active = 1 ORDER BY program_name')->fetchAll();
         send_json(200, ['students' => $statement->fetchAll(), 'programs' => $programs]);
+    }
+
+    if ($action === 'registrar_course_results') {
+        $registrar = require_user('registrar');
+        if ($method === 'GET') {
+            $studentUserId = filter_var($_GET['student_user_id'] ?? null, FILTER_VALIDATE_INT);
+            if (!$studentUserId) send_json(422, ['error' => 'Select a student record.']);
+            $studentQuery = $pdo->prepare('SELECT program_id FROM student_records WHERE user_id = :user_id');
+            $studentQuery->execute(['user_id' => $studentUserId]);
+            $programId = $studentQuery->fetchColumn();
+            if (!$programId) send_json(404, ['error' => 'That student record was not found.']);
+            $courses = $pdo->prepare(
+                'SELECT c.course_id, c.course_code, c.course_title, pc.recommended_year, pc.recommended_semester
+                 FROM program_courses pc JOIN courses c ON c.course_id = pc.course_id
+                 WHERE pc.program_id = :program_id ORDER BY pc.recommended_year, pc.recommended_semester, c.course_code'
+            );
+            $courses->execute(['program_id' => $programId]);
+            $terms = $pdo->query(
+                'SELECT t.term_id, t.term_name, ay.year_label FROM academic_terms t
+                 JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
+                 ORDER BY ay.start_date DESC, t.start_date'
+            )->fetchAll();
+            $results = $pdo->prepare(
+                'SELECT r.result_id, r.course_id, r.term_id, r.result_status, r.recorded_at,
+                        c.course_code, c.course_title, t.term_name, ay.year_label
+                 FROM student_course_results r JOIN courses c ON c.course_id = r.course_id
+                 JOIN academic_terms t ON t.term_id = r.term_id JOIN academic_years ay ON ay.academic_year_id = t.academic_year_id
+                 WHERE r.student_user_id = :student_user_id ORDER BY t.start_date DESC, c.course_code'
+            );
+            $results->execute(['student_user_id' => $studentUserId]);
+            send_json(200, ['courses' => $courses->fetchAll(), 'terms' => $terms, 'results' => $results->fetchAll()]);
+        }
+        if ($method === 'POST') {
+            $body = request_body();
+            $studentUserId = filter_var($body['student_user_id'] ?? null, FILTER_VALIDATE_INT);
+            $termId = filter_var($body['term_id'] ?? null, FILTER_VALIDATE_INT);
+            $courseId = trim((string)($body['course_id'] ?? ''));
+            $resultStatus = (string)($body['result_status'] ?? '');
+            if (!$studentUserId || !$termId || $courseId === '' || !in_array($resultStatus, ['passed', 'failed', 'incomplete'], true)) {
+                send_json(422, ['error' => 'Choose a student, course, term, and result status.']);
+            }
+            $valid = $pdo->prepare(
+                'SELECT 1 FROM student_records sr JOIN program_courses pc ON pc.program_id = sr.program_id AND pc.course_id = :course_id
+                 JOIN academic_terms t ON t.term_id = :term_id WHERE sr.user_id = :student_user_id'
+            );
+            $valid->execute(['course_id' => $courseId, 'term_id' => $termId, 'student_user_id' => $studentUserId]);
+            if (!$valid->fetchColumn()) send_json(422, ['error' => 'The selected course and term must belong to the student’s academic record.']);
+            $save = $pdo->prepare(
+                'INSERT INTO student_course_results (student_user_id, course_id, term_id, result_status, recorded_by_user_id)
+                 VALUES (:student_user_id, :course_id, :term_id, :result_status, :recorded_by)
+                 ON DUPLICATE KEY UPDATE result_status = VALUES(result_status), recorded_by_user_id = VALUES(recorded_by_user_id), recorded_at = NOW()'
+            );
+            $save->execute(['student_user_id' => $studentUserId, 'course_id' => $courseId, 'term_id' => $termId, 'result_status' => $resultStatus, 'recorded_by' => $registrar['user_id']]);
+            send_json(200, ['message' => 'Past course result saved.']);
+        }
+        request_method('GET');
     }
 
     if ($action === 'admin_users') {
@@ -1799,6 +1961,14 @@ try {
                 send_json(409, ['error' => 'You cannot suspend the account you are currently using.']);
             }
             if ($status === 'active') {
+                $studentWithoutRecord = $pdo->prepare(
+                    'SELECT 1 FROM users u WHERE u.user_id = :user_id AND u.role = \'student\'
+                     AND NOT EXISTS (SELECT 1 FROM student_records sr WHERE sr.user_id = u.user_id)'
+                );
+                $studentWithoutRecord->execute(['user_id' => $userId]);
+                if ($studentWithoutRecord->fetchColumn()) {
+                    send_json(409, ['error' => 'Add the student record before activating this student account.']);
+                }
                 $withdrawnStudent = $pdo->prepare(
                     'SELECT 1 FROM users
                      WHERE user_id = :user_id AND role = \'student\' AND student_status = \'withdrawn\''
@@ -1904,7 +2074,9 @@ try {
             $settings['two_factor_required_for_admins'] ??= true;
             $settings['session_timeout_minutes'] ??= 30;
             $settings['maintenance_mode'] ??= false;
-            send_json(200, ['settings' => $settings]);
+            $academicYears = $pdo->query('SELECT year_label FROM academic_years ORDER BY start_date DESC')->fetchAll(PDO::FETCH_COLUMN);
+            if (!$academicYears && !empty($settings['academic_year_label'])) $academicYears[] = $settings['academic_year_label'];
+            send_json(200, ['settings' => $settings, 'academic_years' => $academicYears]);
         }
         if ($method === 'PUT') {
             $body = request_body();
@@ -1915,6 +2087,9 @@ try {
                 || !in_array($timeout, [15, 30, 60, 0], true)) {
                 send_json(422, ['error' => 'Provide a valid institution name, academic year, and session timeout.']);
             }
+            $yearExists = $pdo->prepare('SELECT 1 FROM academic_years WHERE year_label = :year_label LIMIT 1');
+            $yearExists->execute(['year_label' => $yearLabel]);
+            if (!$yearExists->fetchColumn()) send_json(422, ['error' => 'Choose an academic year already configured in the system.']);
             $settings = [
                 'institution_name' => $institution,
                 'academic_year_label' => $yearLabel,
@@ -1985,17 +2160,26 @@ try {
         $user = require_user('student');
 
         $statement = $pdo->prepare(
-            'SELECT co.offering_id, c.course_code, c.course_title, c.units,
-                    co.section_code, COALESCE(co.instructor_name, \'Unassigned\') AS instructor
+            'SELECT co.offering_id, co.course_id, c.course_code, c.course_title, c.units,
+                    co.section_code, COALESCE(co.instructor_name, \'Unassigned\') AS instructor,
+                    pc.recommended_year, pc.recommended_semester, sr.is_irregular
              FROM course_offerings co
              JOIN courses c ON c.course_id = co.course_id
              JOIN users sp ON sp.user_id = :student_user_id
              JOIN programs p ON p.program_id = sp.program_id
+             JOIN student_records sr ON sr.user_id = sp.user_id
              JOIN program_courses pc ON pc.program_id = sp.program_id
-               AND pc.course_id = c.course_id AND pc.recommended_year = sp.year_level
+               AND pc.course_id = c.course_id
              JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status = \'active\'
              WHERE co.offering_status = \'open\' AND c.course_status = \'active\'
-               AND co.section_code LIKE CONCAT(p.program_code, \'-\', sp.year_level, \'%\')
+               AND co.section_code LIKE CONCAT(p.program_code, \'-\', pc.recommended_year, \'-%\')
+               AND (pc.recommended_year = sp.year_level OR (sr.is_irregular = 1 AND
+                    (pc.recommended_year > sp.year_level OR EXISTS (
+                      SELECT 1 FROM student_course_results prior
+                      WHERE prior.student_user_id = sp.user_id AND prior.course_id = c.course_id
+                        AND prior.result_status = \'failed\'
+                    ))))
+               AND pc.recommended_semester = CASE t.term_name WHEN \'1st semester\' THEN 1 WHEN \'2nd semester\' THEN 2 ELSE 0 END
                AND (
                  NOT EXISTS (
                    SELECT 1
@@ -2005,7 +2189,7 @@ try {
                      AND assigned_term.term_status = \'active\'
                    WHERE assigned.student_user_id = sp.user_id
                      AND assigned.enrollment_status IN (\'pending\', \'approved\')
-                     AND assigned_offering.section_code LIKE CONCAT(p.program_code, \'-\', sp.year_level, \'%\')
+                     AND assigned_offering.section_code LIKE CONCAT(p.program_code, \'-\', pc.recommended_year, \'-%\')
                  )
                  OR co.section_code = (
                    SELECT assigned_offering.section_code
@@ -2015,7 +2199,7 @@ try {
                      AND assigned_term.term_status = \'active\'
                    WHERE assigned.student_user_id = sp.user_id
                      AND assigned.enrollment_status IN (\'pending\', \'approved\')
-                     AND assigned_offering.section_code LIKE CONCAT(p.program_code, \'-\', sp.year_level, \'%\')
+                     AND assigned_offering.section_code LIKE CONCAT(p.program_code, \'-\', pc.recommended_year, \'-%\')
                    GROUP BY assigned_offering.section_code
                    ORDER BY COUNT(*) DESC, assigned_offering.section_code
                    LIMIT 1
@@ -2033,8 +2217,29 @@ try {
              ORDER BY c.course_code, co.section_code'
         );
         $statement->execute(['student_user_id' => $user['user_id']]);
+        $catalog = $statement->fetchAll();
+        $studentRecord = $pdo->prepare('SELECT program_id, year_level FROM student_records WHERE user_id = :student_user_id');
+        $studentRecord->execute(['student_user_id' => $user['user_id']]);
+        $academicRecord = $studentRecord->fetch();
+        foreach ($catalog as &$course) {
+            $isAdvanced = (int)$course['recommended_year'] > (int)$academicRecord['year_level'];
+            $failed = $pdo->prepare('SELECT EXISTS (SELECT 1 FROM student_course_results WHERE student_user_id = :student_user_id AND course_id = :course_id AND result_status = \'failed\')');
+            $failed->execute(['student_user_id' => $user['user_id'], 'course_id' => $course['course_id']]);
+            $isRetake = (bool)$failed->fetchColumn();
+            $course['is_retake'] = $isRetake;
+            $course['eligibility'] = 'eligible';
+            $course['eligibility_reason'] = $isAdvanced ? 'Checking listed prerequisites.' : ($isRetake ? 'Failed course retake.' : 'Normal program sequence.');
+            if ($isAdvanced || $isRetake) {
+                $check = course_prerequisite_check($pdo, (int)$user['user_id'], (string)$academicRecord['program_id'], (string)$course['course_id']);
+                $course['eligibility'] = $check['eligible'] ? 'eligible' : 'blocked';
+                $course['eligibility_reason'] = !$check['eligible']
+                    ? 'Pass each listed prerequisite first.'
+                    : ($check['has_prerequisites'] ? 'All listed prerequisites are passed.' : 'No prerequisites are listed for this course.');
+            }
+        }
+        unset($course);
 
-        send_json(200, ['courses' => $statement->fetchAll()]);
+        send_json(200, ['courses' => $catalog]);
     }
 
     if ($action === 'registrar_sections') {
@@ -2154,7 +2359,7 @@ try {
                 }
 
                 $profiles = $pdo->prepare(
-                    'SELECT sp.user_id,
+                    'SELECT sp.user_id, sp.year_level,
                             COALESCE(section_assignment.section_code, r.section_code) AS section_code
                      FROM users sp
                      JOIN users u ON u.user_id = sp.user_id AND u.account_status = \'active\'
@@ -2166,19 +2371,30 @@ try {
                      ORDER BY sp.student_number'
                 );
                 $profiles->execute(['program_id' => $programId, 'term_id' => $termId]);
-                $sectionCounts = ['A' => 0, 'B' => 0, 'C' => 0];
+                $sectionCounts = [];
                 $saveSection = $pdo->prepare(
                     'INSERT INTO student_section_assignments (student_user_id, term_id, section_code, assigned_by_user_id)
                      VALUES (:student_user_id, :term_id, :section_code, :assigned_by)
                      ON DUPLICATE KEY UPDATE section_code = VALUES(section_code), assigned_by_user_id = VALUES(assigned_by_user_id), assigned_at = NOW()'
                 );
                 foreach ($profiles->fetchAll() as $profile) {
-                    $section = $profile['section_code'];
-                    if (!in_array($section, ['A', 'B', 'C'], true)) {
-                        asort($sectionCounts);
-                        $section = (string)array_key_first($sectionCounts);
+                    $year = (int)$profile['year_level'];
+                    $sectionCounts[$year] ??= ['A' => 0, 'B' => 0, 'C' => 0];
+                    $section = (string)$profile['section_code'];
+                    if (!in_array($section, ['A', 'B', 'C'], true) || $sectionCounts[$year][$section] >= 10) {
+                        $section = '';
+                        foreach (['A', 'B', 'C'] as $candidate) {
+                            if ($sectionCounts[$year][$candidate] < 10) {
+                                $section = $candidate;
+                                break;
+                            }
+                        }
+                        if ($section === '') {
+                            $pdo->rollBack();
+                            send_json(409, ['error' => 'All three sections are full for Year ' . $year . '. Add another section before preparing this semester.']);
+                        }
                     }
-                    $sectionCounts[$section]++;
+                    $sectionCounts[$year][$section]++;
                     $saveSection->execute([
                         'student_user_id' => $profile['user_id'],
                         'term_id' => $termId,
@@ -2189,15 +2405,16 @@ try {
 
                 $insertOffering = $pdo->prepare(
                     'INSERT INTO course_offerings (course_id, term_id, section_code, capacity, offering_status)
-                     VALUES (:course_id, :term_id, :section_code, 40, \'open\')
-                     ON DUPLICATE KEY UPDATE offering_id = LAST_INSERT_ID(offering_id)'
+                     VALUES (:course_id, :term_id, :section_code, 10, \'open\')
+                     ON DUPLICATE KEY UPDATE offering_id = LAST_INSERT_ID(offering_id), capacity = 10'
                 );
                 $getOffering = $pdo->prepare(
                     'SELECT offering_id, course_number FROM course_offerings
                      WHERE course_id = :course_id AND term_id = :term_id AND section_code = :section_code FOR UPDATE'
                 );
                 $numberOffering = $pdo->prepare('UPDATE course_offerings SET course_number = :course_number WHERE offering_id = :offering_id AND course_number IS NULL');
-                $yearPrefix = substr((string)$term['year_label'], 0, 4);
+                $yearPrefix = course_number_year_prefix((string)$term['year_label']);
+                $nextCourseSequence = next_course_number_sequence($pdo, (int)$termId);
                 foreach ($courses as $course) {
                     foreach (['A', 'B', 'C'] as $section) {
                         $sectionCode = $term['program_code'] . '-' . $course['recommended_year'] . '-' . $section;
@@ -2218,7 +2435,7 @@ try {
                         }
                         if (!$offering['course_number']) {
                             $numberOffering->execute([
-                                'course_number' => $yearPrefix . (string)$semester . str_pad((string)$offering['offering_id'], 4, '0', STR_PAD_LEFT),
+                                'course_number' => $yearPrefix . (string)$semester . str_pad((string)$nextCourseSequence++, 4, '0', STR_PAD_LEFT),
                                 'offering_id' => $offering['offering_id'],
                             ]);
                         }
@@ -2316,6 +2533,9 @@ try {
                     send_json(422, ['error' => 'Choose an active student, semester, and section A through E.']);
                 }
 
+                $pdo->beginTransaction();
+                $lockTerm = $pdo->prepare('SELECT term_id FROM academic_terms WHERE term_id = :term_id FOR UPDATE');
+                $lockTerm->execute(['term_id' => $termId]);
                 $studentQuery = $pdo->prepare(
                     'SELECT sp.user_id, sp.program_id, p.program_code, sp.year_level
                      FROM users sp
@@ -2331,9 +2551,11 @@ try {
                 $studentQuery->execute(['term_id' => $termId, 'student_user_id' => $studentUserId]);
                 $student = $studentQuery->fetch();
                 if (!$student) {
+                    $pdo->rollBack();
                     send_json(404, ['error' => 'That student or semester is no longer available.']);
                 }
                 if ($student['program_id'] !== $programId) {
+                    $pdo->rollBack();
                     send_json(422, ['error' => 'The student does not belong to the selected program.']);
                 }
 
@@ -2344,6 +2566,7 @@ try {
                 );
                 $availableSection->execute(['term_id' => $termId, 'section_code' => $sectionCode]);
                 if (!$availableSection->fetchColumn()) {
+                    $pdo->rollBack();
                     send_json(422, ['error' => 'That section is not configured for the student\'s program and year.']);
                 }
 
@@ -2360,7 +2583,34 @@ try {
                     'section_code' => $sectionCode,
                 ]);
                 if ($enrolled->fetchColumn()) {
+                    $pdo->rollBack();
                     send_json(409, ['error' => 'This student already has an enrollment in a different section for the selected semester. Update the enrollment records before changing their section.']);
+                }
+
+                $existingAssignment = $pdo->prepare(
+                    'SELECT section_code FROM student_section_assignments WHERE student_user_id = :student_user_id AND term_id = :term_id'
+                );
+                $existingAssignment->execute(['student_user_id' => $studentUserId, 'term_id' => $termId]);
+                $oldSection = $existingAssignment->fetchColumn();
+                if ($oldSection !== $section) {
+                    $countSection = $pdo->prepare(
+                        'SELECT COUNT(*) FROM users s
+                         LEFT JOIN student_section_assignments a ON a.student_user_id = s.user_id AND a.term_id = :term_id
+                         LEFT JOIN campus_student_registry r ON r.student_number = s.student_number
+                         WHERE s.program_id = :program_id AND s.year_level = :year_level AND s.role = \'student\'
+                           AND s.student_status = \'active\'
+                           AND COALESCE(a.section_code, r.section_code) = :section_code'
+                    );
+                    $countSection->execute([
+                        'term_id' => $termId,
+                        'program_id' => $programId,
+                        'year_level' => $student['year_level'],
+                        'section_code' => $section,
+                    ]);
+                    if ((int)$countSection->fetchColumn() >= 10) {
+                        $pdo->rollBack();
+                        send_json(409, ['error' => 'Section ' . $section . ' is full (10 students). Choose another section.']);
+                    }
                 }
 
                 $saveSection = $pdo->prepare(
@@ -2376,6 +2626,7 @@ try {
                     'section_code' => $section,
                     'assigned_by' => $registrar['user_id'],
                 ]);
+                $pdo->commit();
                 send_json(200, ['message' => 'Student assigned to Section ' . $section . '.']);
             }
             $offeringId = filter_var($body['offering_id'] ?? null, FILTER_VALIDATE_INT);
@@ -2411,6 +2662,7 @@ try {
             $students = $pdo->query(
                 'SELECT sp.user_id, sp.student_number, u.full_name AS student_name,
                         sp.program_id, p.program_code, p.program_name, sp.year_level,
+                        sr.is_irregular,
                         (EXISTS (
                             SELECT 1 FROM student_document_registration_requests documents
                             WHERE documents.student_user_id = sp.user_id
@@ -2422,6 +2674,7 @@ try {
                           )) AS has_submitted_documents
                  FROM users sp
                  JOIN users u ON u.user_id = sp.user_id AND u.account_status = \'active\'
+                 JOIN student_records sr ON sr.user_id = sp.user_id
                  JOIN programs p ON p.program_id = sp.program_id AND p.is_active = 1
                  WHERE sp.student_status = \'active\'
                  ORDER BY p.program_code, sp.year_level, u.full_name'
@@ -2480,6 +2733,8 @@ try {
             }
 
             $pdo->beginTransaction();
+            $lockTerm = $pdo->prepare('SELECT term_id FROM academic_terms WHERE term_id = :term_id FOR UPDATE');
+            $lockTerm->execute(['term_id' => $termId]);
             $studentQuery = $pdo->prepare(
                 'SELECT sp.user_id, sp.student_number, p.program_code, sp.year_level,
                         COALESCE(section_assignment.section_code, roster.section_code, \'A\') AS section_letter,
@@ -2503,6 +2758,60 @@ try {
                 $pdo->rollBack();
                 send_json(404, ['error' => 'The selected student or semester is no longer available.']);
             }
+
+            $section = (string)$student['section_letter'];
+            $sectionCountsQuery = $pdo->prepare(
+                'SELECT COALESCE(a.section_code, r.section_code) AS section_code, COUNT(*) AS student_count
+                 FROM users s
+                 LEFT JOIN student_section_assignments a ON a.student_user_id = s.user_id AND a.term_id = :term_id
+                 LEFT JOIN campus_student_registry r ON r.student_number = s.student_number
+                 WHERE s.program_id = (
+                   SELECT program_id FROM users WHERE user_id = :student_user_id
+                 ) AND s.year_level = :year_level AND s.role = \'student\' AND s.student_status = \'active\'
+                   AND COALESCE(a.section_code, r.section_code) IN (\'A\', \'B\', \'C\')
+                 GROUP BY COALESCE(a.section_code, r.section_code)'
+            );
+            $sectionCountsQuery->execute([
+                'term_id' => $termId,
+                'student_user_id' => $studentUserId,
+                'year_level' => $student['year_level'],
+            ]);
+            $sectionCounts = array_fill_keys(['A', 'B', 'C'], 0);
+            foreach ($sectionCountsQuery->fetchAll() as $sectionCount) {
+                if (isset($sectionCounts[$sectionCount['section_code']])) {
+                    $sectionCounts[$sectionCount['section_code']] = (int)$sectionCount['student_count'];
+                }
+            }
+            $currentAssignment = $pdo->prepare(
+                'SELECT section_code FROM student_section_assignments WHERE student_user_id = :student_user_id AND term_id = :term_id'
+            );
+            $currentAssignment->execute(['student_user_id' => $studentUserId, 'term_id' => $termId]);
+            $hasAssignment = $currentAssignment->fetchColumn();
+            if (!$hasAssignment || !isset($sectionCounts[$section])) {
+                $section = '';
+                foreach (['A', 'B', 'C'] as $candidate) {
+                    if ($sectionCounts[$candidate] < 10) {
+                        $section = $candidate;
+                        break;
+                    }
+                }
+                if ($section === '') {
+                    $pdo->rollBack();
+                    send_json(409, ['error' => 'All sections are full for this program and year. Add another section before enrolling this student.']);
+                }
+                $saveAssignment = $pdo->prepare(
+                    'INSERT INTO student_section_assignments (student_user_id, term_id, section_code, assigned_by_user_id)
+                     VALUES (:student_user_id, :term_id, :section_code, :assigned_by)
+                     ON DUPLICATE KEY UPDATE section_code = VALUES(section_code), assigned_by_user_id = VALUES(assigned_by_user_id)'
+                );
+                $saveAssignment->execute([
+                    'student_user_id' => $studentUserId,
+                    'term_id' => $termId,
+                    'section_code' => $section,
+                    'assigned_by' => $registrar['user_id'],
+                ]);
+            }
+            $student['section_letter'] = $section;
 
             if ((int)$student['year_level'] === 1) {
                 $hasSubmittedDocuments = $pdo->prepare(
@@ -2550,10 +2859,12 @@ try {
             }
 
             $enrolledCount = 0;
+            $yearPrefix = course_number_year_prefix((string)$student['year_label']);
+            $nextCourseSequence = next_course_number_sequence($pdo, (int)$termId);
             $insertOffering = $pdo->prepare(
                 'INSERT INTO course_offerings (course_id, term_id, section_code, capacity, offering_status)
-                 VALUES (:course_id, :term_id, :section_code, 40, \'open\')
-                 ON DUPLICATE KEY UPDATE offering_id = LAST_INSERT_ID(offering_id)'
+                 VALUES (:course_id, :term_id, :section_code, 10, \'open\')
+                 ON DUPLICATE KEY UPDATE offering_id = LAST_INSERT_ID(offering_id), capacity = 10'
             );
             $getOffering = $pdo->prepare(
                 'SELECT offering_id, course_number, capacity, offering_status FROM course_offerings
@@ -2601,9 +2912,8 @@ try {
                          WHERE offering_id = :offering_id AND course_number IS NULL'
                     );
                     $updateCourseNumber->execute([
-                        'course_number' => substr((string)$student['year_label'], 0, 4)
-                            . (string)$semesterNumber
-                            . str_pad((string)$offering['offering_id'], 4, '0', STR_PAD_LEFT),
+                        'course_number' => $yearPrefix . (string)$semesterNumber
+                            . str_pad((string)$nextCourseSequence++, 4, '0', STR_PAD_LEFT),
                         'offering_id' => $offering['offering_id'],
                     ]);
                 }
@@ -2678,7 +2988,7 @@ try {
 
             $pdo->beginTransaction();
             $studentYear = $pdo->prepare(
-                'SELECT year_level FROM users
+                'SELECT year_level, program_id FROM users
                  WHERE user_id = :student_user_id AND role = \'student\'
                  FOR UPDATE'
             );
@@ -2709,51 +3019,133 @@ try {
                 }
             }
 
-            $offering = $pdo->prepare(
-                'SELECT co.offering_id, co.capacity, c.course_code
+            $requestedOffering = $pdo->prepare(
+                'SELECT co.course_id, co.term_id, co.capacity, c.course_code, p.program_code,
+                        co.section_code, sp.program_id, sp.year_level, pc.recommended_year,
+                        pc.recommended_semester, sr.is_irregular
                  FROM course_offerings co
                  JOIN courses c ON c.course_id = co.course_id
                  JOIN users sp ON sp.user_id = :student_user_id
                  JOIN programs p ON p.program_id = sp.program_id
+                 JOIN student_records sr ON sr.user_id = sp.user_id
                  JOIN program_courses pc ON pc.program_id = sp.program_id
-                   AND pc.course_id = c.course_id AND pc.recommended_year = sp.year_level
+                   AND pc.course_id = c.course_id
                  JOIN academic_terms t ON t.term_id = co.term_id AND t.term_status = \'active\'
                  WHERE co.offering_id = :offering_id
-                   AND co.section_code LIKE CONCAT(p.program_code, \'-\', sp.year_level, \'%\')
-                   AND (
-                     NOT EXISTS (
-                       SELECT 1
-                       FROM enrollments assigned
-                       JOIN course_offerings assigned_offering ON assigned_offering.offering_id = assigned.offering_id
-                       JOIN academic_terms assigned_term ON assigned_term.term_id = assigned_offering.term_id
-                         AND assigned_term.term_status = \'active\'
-                       WHERE assigned.student_user_id = sp.user_id
-                         AND assigned.enrollment_status IN (\'pending\', \'approved\')
-                         AND assigned_offering.section_code LIKE CONCAT(p.program_code, \'-\', sp.year_level, \'%\')
-                     )
-                     OR co.section_code = (
-                       SELECT assigned_offering.section_code
-                       FROM enrollments assigned
-                       JOIN course_offerings assigned_offering ON assigned_offering.offering_id = assigned.offering_id
-                       JOIN academic_terms assigned_term ON assigned_term.term_id = assigned_offering.term_id
-                         AND assigned_term.term_status = \'active\'
-                       WHERE assigned.student_user_id = sp.user_id
-                         AND assigned.enrollment_status IN (\'pending\', \'approved\')
-                         AND assigned_offering.section_code LIKE CONCAT(p.program_code, \'-\', sp.year_level, \'%\')
-                       GROUP BY assigned_offering.section_code
-                       ORDER BY COUNT(*) DESC, assigned_offering.section_code
-                       LIMIT 1
-                     )
-                   )
-                   AND co.offering_status = \'open\' AND c.course_status = \'active\'
-                 FOR UPDATE'
+                   AND co.section_code LIKE CONCAT(p.program_code, \'-\', pc.recommended_year, \'-%\')
+                   AND (pc.recommended_year = sp.year_level OR sr.is_irregular = 1)
+                   AND co.offering_status = \'open\' AND c.course_status = \'active\''
             );
-            $offering->execute(['offering_id' => $offeringId, 'student_user_id' => $user['user_id']]);
-            $available = $offering->fetch();
+            $requestedOffering->execute(['offering_id' => $offeringId, 'student_user_id' => $user['user_id']]);
+            $requested = $requestedOffering->fetch();
 
-            if (!$available) {
+            if (!$requested) {
                 $pdo->rollBack();
                 send_json(404, ['error' => 'That course offering is no longer available.']);
+            }
+
+            $priorFailure = $pdo->prepare('SELECT EXISTS (SELECT 1 FROM student_course_results WHERE student_user_id = :student_user_id AND course_id = :course_id AND result_status = \'failed\')');
+            $priorFailure->execute(['student_user_id' => $user['user_id'], 'course_id' => $requested['course_id']]);
+            $hasFailed = (bool)$priorFailure->fetchColumn();
+            if ((int)$requested['recommended_year'] < (int)$requested['year_level'] && !$hasFailed) {
+                $pdo->rollBack();
+                send_json(403, ['error' => 'This earlier-year course is available only as a retake after a failed result is recorded.', 'eligibility' => 'blocked']);
+            }
+            $requiresPrerequisiteCheck = (int)$requested['recommended_year'] > (int)$requested['year_level'] || $hasFailed;
+            if ($requiresPrerequisiteCheck) {
+                $eligibility = course_prerequisite_check(
+                    $pdo,
+                    (int)$user['user_id'],
+                    (string)$requested['program_id'],
+                    (string)$requested['course_id']
+                );
+                if (!$eligibility['eligible']) {
+                    $missingCourses = $pdo->prepare('SELECT course_code FROM courses WHERE course_id IN (' . implode(',', array_fill(0, count($eligibility['missing_course_ids']), '?')) . ') ORDER BY course_code');
+                    $missingCourses->execute($eligibility['missing_course_ids']);
+                    $missingCodes = array_column($missingCourses->fetchAll(), 'course_code');
+                    $pdo->rollBack();
+                    send_json(403, ['error' => 'Prerequisite check failed. Complete these courses first: ' . implode(', ', $missingCodes) . '.', 'eligibility' => 'blocked', 'rule' => $eligibility['rule']]);
+                }
+            }
+
+            $lockTerm = $pdo->prepare('SELECT term_id FROM academic_terms WHERE term_id = :term_id FOR UPDATE');
+            $lockTerm->execute(['term_id' => $requested['term_id']]);
+            $assignmentQuery = $pdo->prepare(
+                'SELECT section_code FROM student_section_assignments
+                 WHERE student_user_id = :student_user_id AND term_id = :term_id'
+            );
+            $assignmentQuery->execute(['student_user_id' => $user['user_id'], 'term_id' => $requested['term_id']]);
+            $assignedSection = $assignmentQuery->fetchColumn();
+            if ((int)$requested['recommended_year'] > (int)$requested['year_level']) {
+                $advancedSections = $pdo->prepare(
+                    'SELECT RIGHT(co.section_code, 1) AS section_letter, co.capacity,
+                            (SELECT COUNT(*) FROM enrollments e WHERE e.offering_id = co.offering_id
+                             AND e.enrollment_status IN (\'pending\', \'approved\')) AS enrolled_count
+                     FROM course_offerings co WHERE co.course_id = :course_id AND co.term_id = :term_id
+                       AND co.offering_status = \'open\' AND co.section_code LIKE CONCAT(:program_code, \'-\', :course_year, \'-%\')
+                     ORDER BY RIGHT(co.section_code, 1) FOR UPDATE'
+                );
+                $advancedSections->execute(['course_id' => $requested['course_id'], 'term_id' => $requested['term_id'], 'program_code' => $requested['program_code'], 'course_year' => $requested['recommended_year']]);
+                $assignedSection = null;
+                foreach ($advancedSections->fetchAll() as $candidate) {
+                    if ((int)$candidate['enrolled_count'] < (int)$candidate['capacity']) { $assignedSection = $candidate['section_letter']; break; }
+                }
+                if (!$assignedSection) {
+                    $pdo->rollBack();
+                    send_json(409, ['error' => 'All sections of that course are full. Contact the registrar.']);
+                }
+            }
+            if (!$assignedSection) {
+                $countsQuery = $pdo->prepare(
+                    'SELECT COALESCE(a.section_code, r.section_code) AS section_code, COUNT(*) AS student_count
+                     FROM users s
+                     LEFT JOIN student_section_assignments a ON a.student_user_id = s.user_id AND a.term_id = :term_id
+                     LEFT JOIN campus_student_registry r ON r.student_number = s.student_number
+                     WHERE s.program_id = :program_id AND s.year_level = :year_level AND s.role = \'student\'
+                       AND s.student_status = \'active\'
+                       AND COALESCE(a.section_code, r.section_code) IN (\'A\', \'B\', \'C\')
+                     GROUP BY COALESCE(a.section_code, r.section_code)'
+                );
+                $countsQuery->execute([
+                    'term_id' => $requested['term_id'],
+                    'program_id' => $requested['program_id'],
+                    'year_level' => $requested['year_level'],
+                ]);
+                $counts = array_fill_keys(['A', 'B', 'C'], 0);
+                foreach ($countsQuery->fetchAll() as $row) {
+                    if (isset($counts[$row['section_code']])) $counts[$row['section_code']] = (int)$row['student_count'];
+                }
+                foreach (['A', 'B', 'C'] as $candidate) {
+                    if ($counts[$candidate] < 10) { $assignedSection = $candidate; break; }
+                }
+                if (!$assignedSection) {
+                    $pdo->rollBack();
+                    send_json(409, ['error' => 'All sections are full for your program and year. Contact the registrar to add another section.']);
+                }
+                $saveAssignment = $pdo->prepare(
+                    'INSERT INTO student_section_assignments (student_user_id, term_id, section_code)
+                     VALUES (:student_user_id, :term_id, :section_code)'
+                );
+                $saveAssignment->execute([
+                    'student_user_id' => $user['user_id'],
+                    'term_id' => $requested['term_id'],
+                    'section_code' => $assignedSection,
+                ]);
+            }
+
+            $offering = $pdo->prepare(
+                'SELECT co.offering_id, co.capacity, c.course_code
+                 FROM course_offerings co JOIN courses c ON c.course_id = co.course_id
+                 WHERE co.course_id = :course_id AND co.term_id = :term_id
+                   AND co.section_code = :section_code AND co.offering_status = \'open\'
+                 FOR UPDATE'
+            );
+            $sectionCode = $requested['program_code'] . '-' . $requested['recommended_year'] . '-' . $assignedSection;
+            $offering->execute(['course_id' => $requested['course_id'], 'term_id' => $requested['term_id'], 'section_code' => $sectionCode]);
+            $available = $offering->fetch();
+            if (!$available) {
+                $pdo->rollBack();
+                send_json(409, ['error' => 'Section ' . $assignedSection . ' is not available for this course. Contact the registrar.']);
             }
 
             $countEnrolled = $pdo->prepare(
@@ -2871,10 +3263,11 @@ try {
             $statement = $pdo->query(
                 'SELECT e.request_code, e.enrollment_status, e.requested_at,
                         e.decision_note, e.offering_id, s.student_number,
-                        student.full_name AS student_name, p.program_name,
+                        student.full_name AS student_name, p.program_name, sr.is_irregular,
                         c.course_code, c.course_title, c.units
                  FROM enrollments e
                  JOIN users s ON s.user_id = e.student_user_id
+                 JOIN student_records sr ON sr.user_id = s.user_id
                  JOIN users student ON student.user_id = s.user_id
                  JOIN programs p ON p.program_id = s.program_id
                  JOIN course_offerings co ON co.offering_id = e.offering_id
@@ -2894,6 +3287,36 @@ try {
 
             if ($requestCode === '' || !in_array($status, ['approved', 'rejected'], true)) {
                 send_json(422, ['error' => 'Provide a request code and an approved or rejected decision.']);
+            }
+
+            if ($status === 'approved') {
+                $eligibilityQuery = $pdo->prepare(
+                    'SELECT e.student_user_id, sp.program_id, sp.year_level, sr.is_irregular,
+                            c.course_id, pc.recommended_year, pc.recommended_semester,
+                            EXISTS (SELECT 1 FROM student_course_results prior WHERE prior.student_user_id = sp.user_id
+                                    AND prior.course_id = c.course_id AND prior.result_status = \'failed\') AS is_retake
+                     FROM enrollments e JOIN users sp ON sp.user_id = e.student_user_id
+                     JOIN student_records sr ON sr.user_id = sp.user_id
+                     JOIN course_offerings co ON co.offering_id = e.offering_id
+                     JOIN academic_terms t ON t.term_id = co.term_id
+                     JOIN courses c ON c.course_id = co.course_id
+                     JOIN program_courses pc ON pc.program_id = sp.program_id AND pc.course_id = c.course_id
+                     WHERE e.request_code = :request_code AND e.enrollment_status = \'pending\'
+                       AND t.term_status = \'active\' LIMIT 1'
+                );
+                $eligibilityQuery->execute(['request_code' => $requestCode]);
+                $requestCourse = $eligibilityQuery->fetch();
+                if ($requestCourse && (((int)$requestCourse['is_irregular'] === 1 && (int)$requestCourse['recommended_year'] > (int)$requestCourse['year_level']) || (int)$requestCourse['is_retake'] === 1)) {
+                    $check = course_prerequisite_check(
+                        $pdo,
+                        (int)$requestCourse['student_user_id'],
+                        (string)$requestCourse['program_id'],
+                        (string)$requestCourse['course_id']
+                    );
+                    if (!$check['eligible']) {
+                        send_json(409, ['error' => 'This student is not eligible yet. Every listed prerequisite must be recorded as passed before approval.', 'eligibility' => 'blocked', 'rule' => $check['rule']]);
+                    }
+                }
             }
 
             $update = $pdo->prepare(
@@ -2974,11 +3397,23 @@ try {
                 $exists->execute(['id' => $offeringId]);
                 if (!$exists->fetchColumn()) send_json(404, ['error' => 'That course offering is unavailable.']);
                 $overlap = $pdo->prepare(
-                    'SELECT 1 FROM class_meetings WHERE room = :room AND day_of_week = :day
-                     AND start_time < :end_time AND end_time > :start_time LIMIT 1'
+                    'SELECT 1 FROM class_meetings cm
+                     JOIN course_offerings existing ON existing.offering_id = cm.offering_id
+                     JOIN course_offerings target ON target.offering_id = :target_offering
+                     WHERE existing.term_id = target.term_id AND cm.room = :room AND cm.day_of_week = :day
+                       AND cm.start_time < :end_time AND cm.end_time > :start_time LIMIT 1'
                 );
-                $overlap->execute(['room' => $room, 'day' => $day, 'end_time' => $end, 'start_time' => $start]);
+                $overlap->execute(['target_offering' => $offeringId, 'room' => $room, 'day' => $day, 'end_time' => $end, 'start_time' => $start]);
                 if ($overlap->fetchColumn()) send_json(409, ['error' => 'That room already has a class scheduled during this time.']);
+                $sectionOverlap = $pdo->prepare(
+                    'SELECT 1 FROM class_meetings cm
+                     JOIN course_offerings existing ON existing.offering_id = cm.offering_id
+                     JOIN course_offerings target ON target.offering_id = :target_offering
+                     WHERE existing.term_id = target.term_id AND cm.day_of_week = :day AND existing.section_code = target.section_code
+                       AND cm.start_time < :end_time AND cm.end_time > :start_time LIMIT 1'
+                );
+                $sectionOverlap->execute(['target_offering' => $offeringId, 'day' => $day, 'end_time' => $end, 'start_time' => $start]);
+                if ($sectionOverlap->fetchColumn()) send_json(409, ['error' => 'This section already has a class scheduled during that time.']);
                 $insert = $pdo->prepare('INSERT INTO class_meetings (offering_id, day_of_week, start_time, end_time, room) VALUES (:offering_id, :day, :start_time, :end_time, :room)');
                 $insert->execute(['offering_id' => $offeringId, 'day' => $day, 'start_time' => $start, 'end_time' => $end, 'room' => $room]);
                 send_json(201, ['message' => 'Class meeting scheduled.']);
@@ -3052,9 +3487,19 @@ try {
                 if (!$offeringId || !in_array($day, ['monday','tuesday','wednesday','thursday','friday','saturday'], true)
                     || !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $start) || !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $end)
                     || $end <= $start || $room === '' || mb_strlen($room) > 100 || !preg_match('/^[\p{L}\p{N}\s-]+$/u', $room)) send_json(422, ['error' => 'Choose a valid course, day, time range, and classroom.']);
-                $overlap = $pdo->prepare('SELECT 1 FROM class_meetings WHERE meeting_id <> :meeting_id AND room = :room AND day_of_week = :day AND start_time < :end_time AND end_time > :start_time LIMIT 1');
-                $overlap->execute(['meeting_id' => $meetingId, 'room' => $room, 'day' => $day, 'end_time' => $end, 'start_time' => $start]);
+                $overlap = $pdo->prepare('SELECT 1 FROM class_meetings cm JOIN course_offerings existing ON existing.offering_id = cm.offering_id JOIN course_offerings target ON target.offering_id = :target_offering WHERE cm.meeting_id <> :meeting_id AND existing.term_id = target.term_id AND cm.room = :room AND cm.day_of_week = :day AND cm.start_time < :end_time AND cm.end_time > :start_time LIMIT 1');
+                $overlap->execute(['target_offering' => $offeringId, 'meeting_id' => $meetingId, 'room' => $room, 'day' => $day, 'end_time' => $end, 'start_time' => $start]);
                 if ($overlap->fetchColumn()) send_json(409, ['error' => 'That room already has a class scheduled during this time.']);
+                $sectionOverlap = $pdo->prepare(
+                    'SELECT 1 FROM class_meetings cm
+                     JOIN course_offerings existing ON existing.offering_id = cm.offering_id
+                     JOIN course_offerings target ON target.offering_id = :target_offering
+                     WHERE cm.meeting_id <> :meeting_id AND existing.term_id = target.term_id AND cm.day_of_week = :day
+                       AND existing.section_code = target.section_code
+                       AND cm.start_time < :end_time AND cm.end_time > :start_time LIMIT 1'
+                );
+                $sectionOverlap->execute(['target_offering' => $offeringId, 'meeting_id' => $meetingId, 'day' => $day, 'end_time' => $end, 'start_time' => $start]);
+                if ($sectionOverlap->fetchColumn()) send_json(409, ['error' => 'This section already has a class scheduled during that time.']);
                 $update = $pdo->prepare('UPDATE class_meetings SET offering_id = :offering, day_of_week = :day, start_time = :start_time, end_time = :end_time, room = :room WHERE meeting_id = :id AND NOT EXISTS (SELECT 1 FROM attendance_sessions WHERE meeting_id = :session_meeting_id)');
                 $update->execute(['offering' => $offeringId, 'day' => $day, 'start_time' => $start, 'end_time' => $end, 'room' => $room, 'id' => $meetingId, 'session_meeting_id' => $meetingId]);
                 if (!$update->rowCount()) send_json(409, ['error' => 'This class meeting has attendance history or no longer exists.']);

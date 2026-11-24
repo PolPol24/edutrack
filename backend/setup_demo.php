@@ -17,6 +17,9 @@ try {
     foreach ([
         'DELETE FROM class_meetings',
         'DELETE FROM enrollments',
+        'DELETE FROM student_course_results',
+        'DELETE FROM student_records',
+        'DELETE FROM course_prerequisites',
         'DELETE FROM student_section_assignments',
         'UPDATE system_settings SET updated_by_user_id = NULL',
         'DELETE FROM course_offerings',
@@ -50,6 +53,12 @@ try {
         'UPDATE users SET student_number = :student_number, program_id = :program_id,
              year_level = :year_level, student_status = \'active\'
          WHERE user_id = :user_id'
+    );
+    $upsertStudentRecord = $pdo->prepare(
+        'INSERT INTO student_records (user_id, student_number, program_id, year_level, student_status)
+         VALUES (:user_id, :student_number, :program_id, :year_level, \'active\')
+         ON DUPLICATE KEY UPDATE student_number = VALUES(student_number), program_id = VALUES(program_id),
+           year_level = VALUES(year_level), student_status = \'active\', is_irregular = FALSE'
     );
     $upsertEmployee = $pdo->prepare(
         'UPDATE users SET employee_number = :employee_number, department_id = :department_id
@@ -87,6 +96,12 @@ try {
             } while (isset($usedNumbers[$studentNumber]));
             $usedNumbers[$studentNumber] = true;
             $upsertStudent->execute([
+                'user_id' => $userId,
+                'student_number' => $studentNumber,
+                'program_id' => $programId,
+                'year_level' => $yearLevel,
+            ]);
+            $upsertStudentRecord->execute([
                 'user_id' => $userId,
                 'student_number' => $studentNumber,
                 'program_id' => $programId,
@@ -170,7 +185,7 @@ try {
     ];
     $insertOffering = $pdo->prepare(
         'INSERT INTO course_offerings (course_id, term_id, section_code, instructor_name, capacity)
-         SELECT course_id, :term_id, :section, NULL, 40 FROM courses WHERE course_code = :course_code'
+         SELECT course_id, :term_id, :section, NULL, 10 FROM courses WHERE course_code = :course_code'
     );
     $getOffering = $pdo->prepare(
         'SELECT co.offering_id FROM course_offerings co JOIN courses c ON c.course_id = co.course_id

@@ -221,6 +221,17 @@ export default function RegistrarAttendancePage() {
             </div>
           </header>
 
+          <section className="attendance-report-print" aria-hidden="true">
+            <h1>EduTrack University · Attendance report</h1>
+            <p className="attendance-print-subtitle">{filters.date_from || filters.date_to ? `${filters.date_from || "Beginning"} to ${filters.date_to || "Present"}` : "All dates"} · {filters.year_label || "All academic years"} · {filters.course_code || "All subjects"} · {filters.section_code || "All sections"}</p>
+            <p className="attendance-print-summary">Enrolled: {counts.enrolled} · Present: {counts.present} · Late: {counts.late} · Absent: {counts.absent} · Excused: {counts.excused} · Attendance rate: {attendanceRate}%</p>
+            <table>
+              <thead><tr>{["Date", "Academic year", "Course", "Section", "Student", "Student number", "Status", "Method", "Check-in"].map((label) => <th key={label}>{label}</th>)}</tr></thead>
+              <tbody>{data.records.map((item) => <tr key={item.attendance_id}><td>{item.session_date}</td><td>{item.year_label}</td><td>{item.course_code} · {item.course_title}</td><td>{item.section_code}</td><td>{item.full_name}</td><td>{item.student_number}</td><td>{item.attendance_status}</td><td>{item.verification_method === "staff_verified" ? "Staff verified" : item.verification_method === "face" ? "Face match" : "System"}</td><td>{item.checked_in_at?.slice(11, 16) ?? "—"}</td></tr>)}</tbody>
+            </table>
+            <p className="attendance-print-footer">Generated from EduTrack attendance records · {data.records.length} records</p>
+          </section>
+
           {message && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</p>}
           {error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
 

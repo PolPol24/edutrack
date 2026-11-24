@@ -29,7 +29,7 @@ export default function Dashboard() {
   const approved = enrollments.filter((item) => item.enrollment_status === "approved").length;
   const completion = enrollments.length ? Math.round((approved / enrollments.length) * 100) : 0;
   const stats = [
-    { icon: BookOpen, label: "Enrolled courses", value: courses.length, sub: `${courses.reduce((sum, item) => sum + Number(item.units), 0)} credit units`, href: "/student/courses" },
+    { icon: BookOpen, label: "Enrolled credit units", value: courses.reduce((sum, item) => sum + Number(item.units), 0), sub: `${courses.length} approved courses`, href: "/student/courses" },
     { icon: Clock3, label: "Pending enrollment", value: pending, sub: "Awaiting registrar review", href: "/student/enrollment" },
     { icon: UserRound, label: "My profile", value: "View", sub: "Submitted application and documents", href: "/student/profile" },
   ];

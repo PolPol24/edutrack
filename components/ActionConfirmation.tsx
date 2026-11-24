@@ -10,6 +10,7 @@ type ActionConfirmationProps = {
   busy?: boolean;
   error?: string;
   danger?: boolean;
+  confirmDisabled?: boolean;
 };
 
 export default function ActionConfirmation({
@@ -22,6 +23,7 @@ export default function ActionConfirmation({
   busy = false,
   error = "",
   danger = false,
+  confirmDisabled = false,
 }: ActionConfirmationProps) {
   if (!open) return null;
 
@@ -33,7 +35,7 @@ export default function ActionConfirmation({
         {error && <p role="alert" className="mt-4 rounded-lg bg-rose-50 px-3.5 py-3 text-sm text-rose-700">{error}</p>}
         <div className="mt-6 flex justify-end gap-3">
           <button type="button" disabled={busy} onClick={onCancel} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Cancel</button>
-          <button type="button" disabled={busy} onClick={onConfirm} className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-50 ${danger ? "bg-rose-600 hover:bg-rose-700" : "bg-blue-600 hover:bg-blue-700"}`}>
+          <button type="button" disabled={busy || confirmDisabled} onClick={onConfirm} className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 ${danger ? "bg-rose-600 hover:bg-rose-700" : "bg-blue-600 hover:bg-blue-700"}`}>
             {busy ? "Please wait…" : confirmLabel}
           </button>
         </div>

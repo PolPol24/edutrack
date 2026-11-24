@@ -122,7 +122,7 @@ try {
 
     $offeringMap = [];
     $offeringOrdinal = 1;
-    $insertOffering = $pdo->prepare("INSERT INTO course_offerings (course_number, course_id, term_id, section_code, instructor_name, capacity, offering_status) VALUES (?, ?, ?, ?, ?, 40, 'open')");
+    $insertOffering = $pdo->prepare("INSERT INTO course_offerings (course_number, course_id, term_id, section_code, instructor_name, capacity, offering_status) VALUES (?, ?, ?, ?, ?, 10, 'open')");
     $insertMeeting = $pdo->prepare('INSERT INTO class_meetings (offering_id, day_of_week, start_time, end_time, room) VALUES (?, ?, ?, ?, ?)');
     foreach ($rows as $row) {
         $code = $row['course_code'];
